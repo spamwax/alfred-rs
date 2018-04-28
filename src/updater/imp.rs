@@ -8,7 +8,16 @@ where
     T: Releaser,
 {
     pub(super) fn load_or_new(r: T) -> Result<Self, Error> {
-        if let Ok(saved_state) = Self::load() {
+        if let Ok(mut saved_state) = Self::load() {
+            // Overwrite saved state's current_version if the version that
+            // may have been set through env. variable is semantically
+            // newer than version saved in state.
+            let env_ver = env::workflow_version().and_then(|v| Version::parse(&v).ok());
+            if let Some(v) = env_ver {
+                if v > saved_state.current_version {
+                    saved_state.current_version = v;
+                }
+            }
             Ok(Updater {
                 state: saved_state,
                 releaser: RefCell::new(r),

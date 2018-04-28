@@ -236,7 +236,7 @@ where
     ///     fn downloadable_url(&self) -> Result<Url, Error> {
     ///         Ok(Url::parse("https://ci.remote.cc")?)
     ///     }
-    ///     fn latest_version(&self) -> Result<Version, Error> {
+    ///     fn latest_version(&mut self) -> Result<Version, Error> {
     ///         Ok(Version::from((1, 0, 12)))
     ///     }
     /// }
@@ -432,23 +432,90 @@ where
         }
     }
 
+    /// Checks if a new update is available (non-blocking).
+    ///
+    /// The method will spawn a new thread that uses a clone of [`Releaser`] to check for new updates.
+    /// The returned [`Receiver`] value can be use to get the message from the new thread.
+    ///
+    /// ## Note
+    /// The spawned method will attempt to fetch the latest release information from repository. Unlike
+    /// [update_ready()](struct.Updater.html#method.update_ready), it will *only* use the timestamp since
+    /// last check to decide if a network call should be made.
+    ///
+    /// This means it's possible that on every invocation of workflow a network call could be made. Thus
+    /// it is your responsibility (as workflow author) to ensure that unnecessary and repeated *notifications*
+    /// are not presented to user.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # extern crate alfred;
+    /// # extern crate failure;
+    /// # use failure::Error;
+    /// # use alfred::Updater;
+    /// # use std::env;
+    /// # fn do_some_other_stuff() {}
+    /// # fn test_async() -> Result<(), Error> {
+    /// let mut updater = Updater::gh("some/repo")?;
+    ///
+    /// let rx = updater.update_ready_async();
+    ///
+    /// // We'll do some other work that's related to our workflow while waiting
+    /// do_some_other_stuff();
+    ///
+    /// // We can now check if update is ready using two methods on `rx`:
+    /// // 1- Block and wait until it receives results or errors
+    /// let response = rx.recv();
+    ///
+    /// // 2- Or without blocking, check if thread sent results
+    /// let response = rx.try_recv();
+    ///
+    /// if response.is_ok() { // Received good result from other thread
+    ///     let update_status = response.unwrap();
+    ///     if let Ok(ready) = update_status {
+    ///         /* update is ready */
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// # fn main() {
+    /// # env::set_var("alfred_workflow_uid", "abcdef");
+    /// # env::set_var("alfred_workflow_data", env::temp_dir());
+    /// # env::set_var("alfred_workflow_version", "0.0.0");
+    /// # test_async();
+    /// # }
+    /// ```
+    /// [`Releaser`]: trait.Releaser.html
+    /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
+    /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
     pub fn update_ready_async(&self) -> Receiver<Result<bool, Error>> {
         use std::sync::mpsc;
         use std::thread;
 
-        let mut releaser = (*self.releaser.borrow()).clone();
-        let current_version = self.current_version().clone();
-
         let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let outcome = releaser
-                .latest_version()
-                .and_then(|v| Ok(current_version < v));
-            match tx.send(outcome) {
-                Ok(_) => eprintln!("thread: send success"),
-                Err(e) => eprintln!("thread: sending error: {:?}", e),
+
+        if self.last_check().is_none() {
+            self.set_last_check(Utc::now());
+            if self.save().is_err() {
+                eprintln!("couldnot save first state of updaater");
             }
-        });
+            tx.send(Ok(false)).unwrap();
+        } else if !self.due_to_check() {
+            tx.send(Ok(false)).unwrap();
+        } else {
+            let mut releaser = (*self.releaser.borrow()).clone();
+            let current_version = self.current_version().clone();
+
+            thread::spawn(move || {
+                let outcome = releaser
+                    .latest_version()
+                    .and_then(|v| Ok(current_version < v));
+                match tx.send(outcome) {
+                    Ok(_) => eprintln!("thread: send success"),
+                    Err(e) => eprintln!("thread: sending error: {:?}", e),
+                }
+            });
+        }
         rx
     }
 
@@ -740,9 +807,39 @@ mod tests {
     }
 
     #[test]
-    // #[ignore]
-    #[cfg(not(feature = "ci"))]
     fn it_tests_async_updates_2() {
+        // This test will not actually spawn a thread since it's not due to check.
+        setup_workflow_env_vars(true);
+        let _m = setup_mock_server(200);
+
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+
+        updater.set_interval(60).unwrap();
+
+        let rx = updater.update_ready_async();
+        let status = rx.recv();
+        assert!(status.is_ok());
+        assert_eq!(false, status.unwrap().unwrap());
+    }
+
+    #[test]
+    fn it_tests_async_updates_3() {
+        // This test will not actually spawn a thread since it's not due to check.
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+
+        updater.set_interval(60).unwrap();
+        updater.set_last_check(Utc::now());
+
+        let rx = updater.update_ready_async();
+        let status = rx.recv();
+        assert!(status.is_ok());
+        assert_eq!(false, status.unwrap().unwrap());
+    }
+
+    #[test]
+    #[ignore]
+    #[cfg(not(feature = "ci"))]
+    fn it_tests_async_updates_4() {
         // This test won't wait for the other thread to finish (rx.try_recv() doesn't blocks)
         // Need to talk to real server to make sure a latency happens.
         setup_workflow_env_vars(true);
