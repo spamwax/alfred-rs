@@ -137,8 +137,6 @@ pub use self::releaser::Releaser;
 /// Default update interval duration 24 hr
 const UPDATE_INTERVAL: i64 = 24 * 60 * 60;
 
-const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status.json";
-
 /// Struct to check for & download the latest release of workflow from a remote server.
 pub struct Updater<T>
 where
@@ -361,6 +359,7 @@ where
         // Releaser to do a remote call/check for us since we assume that user just downloaded
         // the workflow.
 
+        const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status.json";
         // wf's data dir
         let p: &PathBuf = &env::workflow_data()
             .ok_or_else(|| err_msg("missing env variable for data dir"))
@@ -368,25 +367,6 @@ where
                 dir.push(LATEST_UPDATE_INFO_CACHE_FN);
                 Ok(dir)
             })?;
-
-        // write version of latest avail. release (if any) to a cache file
-        let write_last_check_status = |version: Option<Version>| -> Result<(), Error> {
-            File::create(p).and_then(|fp| {
-                let buf_writer = BufWriter::with_capacity(128, fp);
-                serde_json::to_writer(buf_writer, &version)?;
-                Ok(())
-            })?;
-            Ok(())
-        };
-
-        // read version of latest avail. release (if any) from a cache file
-        let read_last_check_status = || -> Result<Option<Version>, Error> {
-            Ok(File::open(p).and_then(|fp| {
-                let buf_reader = BufReader::with_capacity(128, fp);
-                let v = serde_json::from_reader(buf_reader)?;
-                Ok(v)
-            })?)
-        };
 
         // make a network call to see if a newer version is avail.
         // save the result of call to cache file.
@@ -396,7 +376,7 @@ where
                 .latest_version()
                 .and_then(|v| Ok((*self.current_version() < v, v)))
                 .and_then(|(r, v)| {
-                    write_last_check_status(if r { Some(v) } else { None })?;
+                    Self::write_last_check_status(p, if r { Some(v) } else { None })?;
                     Ok(r)
                 })
                 .and_then(|r| {
@@ -419,7 +399,7 @@ where
             // if wf is cancelled while the network call or file operation was undergoing)
             // we make another network call. Otherwise we use its content to report if an
             // update is ready or not until the next due check is upon us.
-            match read_last_check_status() {
+            match Self::read_last_check_status(p) {
                 Err(_) => ask_releaser_for_update(),
                 Ok(last_check_status) => {
                     if let Some(ref last_check_status) = last_check_status {
@@ -492,29 +472,62 @@ where
         use std::sync::mpsc;
         use std::thread;
 
+        const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status_async.json";
         let (tx, rx) = mpsc::channel();
+        let current_version = self.current_version().clone();
 
         if self.last_check().is_none() {
             self.set_last_check(Utc::now());
             if self.save().is_err() {
                 eprintln!("couldnot save first state of updaater");
             }
+            // This send is always successful
             tx.send(Ok(false)).unwrap();
-        } else if !self.due_to_check() {
-            tx.send(Ok(false)).unwrap();
-        } else {
+        } else if self.due_to_check() {
             let mut releaser = (*self.releaser.borrow()).clone();
-            let current_version = self.current_version().clone();
 
             thread::spawn(move || {
-                let outcome = releaser
-                    .latest_version()
-                    .and_then(|v| Ok(current_version < v));
-                match tx.send(outcome) {
+                // wf's data dir
+                let outcome = env::workflow_data()
+                    .ok_or_else(|| err_msg("missing env variable for data dir"))
+                    .and_then(|mut dir| {
+                        dir.push(LATEST_UPDATE_INFO_CACHE_FN);
+                        Ok(dir)
+                    })
+                    .and_then(|p| {
+                        let update_avail = releaser
+                            .latest_version()
+                            .and_then(|v| Ok((current_version < v, v)))
+                            .and_then(|(r, v)| {
+                                Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
+                                Ok(r)
+                            });
+                        Ok(tx.send(update_avail)?)
+                    });
+                match outcome {
                     Ok(_) => eprintln!("thread: send success"),
                     Err(e) => eprintln!("thread: sending error: {:?}", e),
                 }
             });
+        } else {
+            let p: &PathBuf = &env::workflow_data()
+                .ok_or_else(|| err_msg("missing env variable for data dir"))
+                .and_then(|mut dir| {
+                    dir.push(LATEST_UPDATE_INFO_CACHE_FN);
+                    Ok(dir)
+                })
+                .expect("cannot get path to cache fn");
+
+            match Self::read_last_check_status(p) {
+                Err(_) => start_releaser_worker(),
+                Ok(last_check_status) => {
+                    if let Some(last_check_version) = last_check_status {
+                        tx.send(Ok(current_version < last_check_version)).unwrap();
+                    } else {
+                        tx.send(Ok(false)).unwrap();
+                    }
+                }
+            }
         }
         rx
     }

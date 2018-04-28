@@ -86,6 +86,28 @@ where
             })
     }
 
+    // write version of latest avail. release (if any) to a cache file
+    pub(super) fn write_last_check_status(
+        p: &PathBuf,
+        version: Option<Version>,
+    ) -> Result<(), Error> {
+        File::create(p).and_then(|fp| {
+            let buf_writer = BufWriter::with_capacity(128, fp);
+            serde_json::to_writer(buf_writer, &version)?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    // read version of latest avail. release (if any) from a cache file
+    pub(super) fn read_last_check_status(p: &PathBuf) -> Result<Option<Version>, Error> {
+        Ok(File::open(p).and_then(|fp| {
+            let buf_reader = BufReader::with_capacity(128, fp);
+            let v = serde_json::from_reader(buf_reader)?;
+            Ok(v)
+        })?)
+    }
+
     pub(super) fn build_data_fn() -> Result<PathBuf, Error> {
         let workflow_name = env::workflow_name()
             .unwrap_or_else(|| "YouForgotTo/フ:NameYourOwnWork}flowッ".to_string())
