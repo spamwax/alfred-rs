@@ -358,8 +358,8 @@ where
         // Thus we update last_check to now and just save the updater state without asking
         // Releaser to do a remote call/check for us since we assume that user just downloaded
         // the workflow.
+        use self::imp::LATEST_UPDATE_INFO_CACHE_FN;
 
-        const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status.json";
         // wf's data dir
         let p: &PathBuf = &env::workflow_data()
             .ok_or_else(|| err_msg("missing env variable for data dir"))
@@ -469,12 +469,10 @@ where
     /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
     pub fn update_ready_async(&self) -> Receiver<Result<bool, Error>> {
+        use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
-        use std::thread;
 
-        const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status_async.json";
         let (tx, rx) = mpsc::channel();
-        let current_version = self.current_version().clone();
 
         if self.last_check().is_none() {
             self.set_last_check(Utc::now());
@@ -484,45 +482,27 @@ where
             // This send is always successful
             tx.send(Ok(false)).unwrap();
         } else if self.due_to_check() {
-            let mut releaser = (*self.releaser.borrow()).clone();
-
-            thread::spawn(move || {
-                // wf's data dir
-                let outcome = env::workflow_data()
-                    .ok_or_else(|| err_msg("missing env variable for data dir"))
-                    .and_then(|mut dir| {
-                        dir.push(LATEST_UPDATE_INFO_CACHE_FN);
-                        Ok(dir)
-                    })
-                    .and_then(|p| {
-                        let update_avail = releaser
-                            .latest_version()
-                            .and_then(|v| Ok((current_version < v, v)))
-                            .and_then(|(r, v)| {
-                                Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
-                                Ok(r)
-                            });
-                        Ok(tx.send(update_avail)?)
-                    });
-                match outcome {
-                    Ok(_) => eprintln!("thread: send success"),
-                    Err(e) => eprintln!("thread: sending error: {:?}", e),
-                }
-            });
+            self.start_releaser_worker(tx);
         } else {
             let p: &PathBuf = &env::workflow_data()
                 .ok_or_else(|| err_msg("missing env variable for data dir"))
                 .and_then(|mut dir| {
-                    dir.push(LATEST_UPDATE_INFO_CACHE_FN);
+                    dir.push(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
                     Ok(dir)
                 })
                 .expect("cannot get path to cache fn");
 
+            // if we can't read the cache (corrupted or missing which can happen
+            // if wf is cancelled while the network call or file operation was undergoing)
+            // we make another network call. Otherwise we use its content to report if an
+            // update is ready or not until the next due check is upon us.
             match Self::read_last_check_status(p) {
-                Err(_) => start_releaser_worker(),
+                Err(_) => self.start_releaser_worker(tx),
                 Ok(last_check_status) => {
-                    if let Some(last_check_version) = last_check_status {
-                        tx.send(Ok(current_version < last_check_version)).unwrap();
+                    // These sends are always successful
+                    if let Some(ref last_check_version) = last_check_status {
+                        tx.send(Ok(self.current_version() < last_check_version))
+                            .unwrap();
                     } else {
                         tx.send(Ok(false)).unwrap();
                     }
@@ -773,6 +753,7 @@ mod tests {
         assert!(!updater.due_to_check());
 
         // make mock server return error. This way we can test that no network call was made
+        // assuming Updater can read its cache file successfully
         let _m = setup_mock_server(503);
         let t = updater.update_ready();
         assert!(t.is_ok());
@@ -806,17 +787,13 @@ mod tests {
         let _m = setup_mock_server(200);
 
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
         // Next check will be immediate
         updater.set_interval(0).unwrap();
 
         let rx = updater.update_ready_async();
         let status = rx.recv();
         assert!(status.is_ok());
-        assert_eq!(true, status.unwrap().unwrap());
+        assert_eq!(false, status.unwrap().unwrap());
     }
 
     #[test]
@@ -827,30 +804,53 @@ mod tests {
 
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-        updater.set_interval(60).unwrap();
+        {
+            // Calling update_ready on first run of workflow will return false since we assume workflow
+            // was just downloaded.
+            let r = updater.update_ready_async().recv().unwrap().unwrap();
+            assert_eq!(false, r);
+        }
 
-        let rx = updater.update_ready_async();
-        let status = rx.recv();
-        assert!(status.is_ok());
-        assert_eq!(false, status.unwrap().unwrap());
+        {
+            // Next check will spawn a thread. There should be an update avail. from mock server.
+            updater.set_interval(0).unwrap();
+            let r = updater.update_ready_async().recv().unwrap().unwrap();
+            assert_eq!(true, r);
+        }
+
+        {
+            // make mock server return error. This way we can test that no network call was made
+            // assuming Updater can read its cache file successfully
+            let _m = setup_mock_server(503);
+            // Increase interval
+            updater.set_interval(86400).unwrap();
+
+            let t = updater.update_ready_async().recv().unwrap();
+            assert!(t.is_ok());
+            assert_eq!(true, t.unwrap());
+        }
     }
 
     #[test]
     fn it_tests_async_updates_3() {
         // This test will not actually spawn a thread since it's not due to check.
+        setup_workflow_env_vars(true);
+        let _m = setup_mock_server(200);
+
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-        updater.set_interval(60).unwrap();
+        // Ensure we are forced to read status from a cache file rather than making network call.
+        updater.set_interval(60).expect("*1");
         updater.set_last_check(Utc::now());
 
         let rx = updater.update_ready_async();
         let status = rx.recv();
         assert!(status.is_ok());
-        assert_eq!(false, status.unwrap().unwrap());
+        assert_eq!(true, status.expect("*2").expect("*3"));
     }
 
     #[test]
-    #[ignore]
+    // #[ignore]
     #[cfg(not(feature = "ci"))]
     fn it_tests_async_updates_4() {
         // This test won't wait for the other thread to finish (rx.try_recv() doesn't blocks)
@@ -858,10 +858,14 @@ mod tests {
         setup_workflow_env_vars(true);
 
         let mut updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
+
+        {
+            // Calling update_ready on first run of workflow will return false since we assume workflow
+            // was just downloaded.
+            let r = updater.update_ready_async().recv().unwrap().unwrap();
+            assert_eq!(false, r);
+        }
+
         // Next check will be immediate
         updater.set_interval(0).unwrap();
 

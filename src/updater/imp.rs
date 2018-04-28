@@ -1,11 +1,15 @@
 use super::Error;
 use super::Releaser;
 use super::*;
+use std::sync::mpsc;
 use Updater;
+
+pub(super) const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status.json";
+pub(super) const LATEST_UPDATE_INFO_CACHE_FN_ASYNC: &str = "last_check_status_async.json";
 
 impl<T> Updater<T>
 where
-    T: Releaser,
+    T: Releaser + Send + 'static,
 {
     pub(super) fn load_or_new(r: T) -> Result<Self, Error> {
         if let Ok(mut saved_state) = Self::load() {
@@ -86,6 +90,34 @@ where
             })
     }
 
+    pub(super) fn start_releaser_worker(&self, tx: mpsc::Sender<Result<bool, Error>>) {
+        use std::thread;
+
+        let mut releaser = (*self.releaser.borrow()).clone();
+        let current_version = self.current_version().clone();
+        thread::spawn(move || {
+            let outcome = env::workflow_data()
+                .ok_or_else(|| err_msg("missing env variable for data dir"))
+                .and_then(|mut dir| {
+                    dir.push(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
+                    Ok(dir)
+                })
+                .and_then(|p| {
+                    let update_avail = releaser
+                        .latest_version()
+                        .and_then(|v| Ok((current_version < v, v)))
+                        .and_then(|(r, v)| {
+                            Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
+                            Ok(r)
+                        });
+                    Ok(tx.send(update_avail)?)
+                });
+            match outcome {
+                Ok(_) => eprintln!("thread: send success"),
+                Err(e) => eprintln!("thread: sending error: {:?}", e),
+            }
+        });
+    }
     // write version of latest avail. release (if any) to a cache file
     pub(super) fn write_last_check_status(
         p: &PathBuf,
