@@ -432,38 +432,22 @@ where
         }
     }
 
-    pub fn update_ready_async(&self) -> Receiver<bool> {
+    pub fn update_ready_async(&self) -> Receiver<Result<bool, Error>> {
         use std::sync::mpsc;
         use std::thread;
 
-        let (tx, rx): (mpsc::Sender<bool>, mpsc::Receiver<bool>) = mpsc::channel();
-        // let releaser = (*self.releaser).clone();
         let mut releaser = (*self.releaser.borrow()).clone();
-        let current_version = self.current_version().to_string();
+        let current_version = self.current_version().clone();
+
+        let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let mut x = 0;
-            x += 10;
-            eprintln!("\n--> {}", x);
-            let outcome = releaser.latest_version();
-            if let Ok(v) = outcome {
-                // .and_then(|v| {
-                println!("--> {:?}", v);
-                let my_v = Version::parse(&current_version).unwrap();
-                let m = tx.send(my_v < v);
-                if m.is_ok() {
-                    eprintln!("sent: {}", my_v < v);
-                } else {
-                    eprintln!("err: {:?}", m.unwrap_err());
-                }
-            // Ok(my_v < v)
-            // })
-            } else {
-                eprintln!("releaser error: {:?}", outcome.unwrap_err());
-                // .and_then(|b| Ok(tx.send(b)?));
+            let outcome = releaser
+                .latest_version()
+                .and_then(|v| Ok(current_version < v));
+            match tx.send(outcome) {
+                Ok(_) => eprintln!("thread: send success"),
+                Err(e) => eprintln!("thread: sending error: {:?}", e),
             }
-            // .unwrap_or_else(|e| {
-            //     eprintln!("error in getting & sharing latest version: {:?}", e);
-            // });
         });
         rx
     }
@@ -752,7 +736,7 @@ mod tests {
         let rx = updater.update_ready_async();
         let status = rx.recv();
         assert!(status.is_ok());
-        assert_eq!(true, status.unwrap());
+        assert_eq!(true, status.unwrap().unwrap());
     }
 
     #[test]
@@ -774,10 +758,9 @@ mod tests {
         let rx = updater.update_ready_async();
 
         let status = rx.try_recv();
-        // let status = rx.recv();
-        println!("--> {:?}", status);
-        // assert!(status.is_err());
+        assert!(status.is_err());
     }
+
     pub(super) fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
         // Mimic Alfred's environment variables
         let path = if secure_temp_dir {
