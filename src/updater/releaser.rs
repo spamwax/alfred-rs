@@ -5,7 +5,6 @@ use mockito;
 use reqwest;
 use semver::Version;
 use serde_json;
-use std::cell::RefCell;
 use url::Url;
 
 const GITHUB_API_URL: &str = "https://api.github.com/repos/";
@@ -21,7 +20,7 @@ pub const MOCK_RELEASER_REPO_NAME: &str = "MockZnVja29mZg==/fd850fc2e63511e79f72
 ///
 /// This trait has been implemented for `GithubReleaser` to check for a newer version of a workflow
 /// that's maintained on `github.com`
-pub trait Releaser {
+pub trait Releaser: Clone {
     /// Creates a new `Releaser` instance that is identified as `name`
     fn new<S: Into<String>>(name: S) -> Self;
 
@@ -36,20 +35,20 @@ pub trait Releaser {
     /// performing a full download of the workflow.
     ///
     /// Method returns `Err(Error)` on file or network error.
-    fn latest_version(&self) -> Result<Version, Error>;
+    fn latest_version(&mut self) -> Result<Version, Error>;
 }
 
 /// Struct to handle checking and finding release files from `github.com`
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GithubReleaser {
     repo: String,
-    latest_release: RefCell<Option<ReleaseItem>>,
+    latest_release: Option<ReleaseItem>,
 }
 
 // Struct to store information about a single release point.
 //
 // Each release point may have multiple downloadable assets.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReleaseItem {
     /// name of release that should hold a semver compatible identifier.
     pub tag_name: String,
@@ -57,7 +56,7 @@ pub struct ReleaseItem {
 }
 
 /// A single downloadable asset.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct ReleaseAsset {
     url: String,
     name: String,
@@ -72,13 +71,13 @@ where
     fn from(s: S) -> Self {
         GithubReleaser {
             repo: s.into(),
-            latest_release: RefCell::new(None),
+            latest_release: None,
         }
     }
 }
 
 impl GithubReleaser {
-    fn latest_release_data(&self) -> Result<(), Error> {
+    fn latest_release_data(&mut self) -> Result<(), Error> {
         let client = reqwest::Client::new();
 
         #[cfg(test)]
@@ -107,7 +106,7 @@ impl GithubReleaser {
                 if latest.tag_name.starts_with('v') {
                     latest.tag_name = latest.tag_name.as_str()[1..].to_string();
                 }
-                *self.latest_release.borrow_mut() = Some(latest);
+                self.latest_release = Some(latest);
                 Ok(())
             })
     }
@@ -122,7 +121,6 @@ impl Releaser for GithubReleaser {
     // over `alfredworkflow`
     fn downloadable_url(&self) -> Result<Url, Error> {
         self.latest_release
-            .borrow()
             .as_ref()
             .map(|r| {
                 r.assets
@@ -151,13 +149,12 @@ impl Releaser for GithubReleaser {
             })
     }
 
-    fn latest_version(&self) -> Result<Version, Error> {
-        if self.latest_release.borrow().is_none() {
+    fn latest_version(&mut self) -> Result<Version, Error> {
+        if self.latest_release.is_none() {
             self.latest_release_data()?;
         }
 
         let latest_version = self.latest_release
-            .borrow()
             .as_ref()
             .map(|r| Version::parse(&r.tag_name).ok())
             .ok_or_else(|| err_msg("Couldn't parse fetched version."))?
@@ -174,7 +171,7 @@ pub mod tests {
     #[test]
     fn it_tests_releaser() {
         let _m = setup_mock_server(200);
-        let releaser = GithubReleaser::new(MOCK_RELEASER_REPO_NAME);
+        let mut releaser = GithubReleaser::new(MOCK_RELEASER_REPO_NAME);
 
         // Calling downloadable_url before checking for latest_version will return error
         assert!(releaser.downloadable_url().is_err());

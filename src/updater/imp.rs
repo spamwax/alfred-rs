@@ -7,11 +7,11 @@ impl<T> Updater<T>
 where
     T: Releaser,
 {
-    pub(super) fn load_or_new(r: Box<T>) -> Result<Self, Error> {
+    pub(super) fn load_or_new(r: T) -> Result<Self, Error> {
         if let Ok(saved_state) = Self::load() {
             Ok(Updater {
                 state: saved_state,
-                releaser: r,
+                releaser: RefCell::new(r),
             })
         } else {
             let current_version = env::workflow_version()
@@ -21,7 +21,10 @@ where
                 last_check: Cell::new(None),
                 update_interval: UPDATE_INTERVAL,
             };
-            let updater = Updater { state, releaser: r };
+            let updater = Updater {
+                state,
+                releaser: RefCell::new(r),
+            };
             updater.save()?;
             Ok(updater)
         }

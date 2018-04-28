@@ -117,10 +117,12 @@ use reqwest;
 use semver::Version;
 use serde_json;
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::env as StdEnv;
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 use time::Duration;
 
 #[allow(missing_docs)]
@@ -143,7 +145,7 @@ where
     T: Releaser,
 {
     state: UpdaterState,
-    releaser: Box<T>,
+    releaser: RefCell<T>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -189,7 +191,7 @@ impl Updater<GithubReleaser> {
     where
         S: Into<String>,
     {
-        let releaser = Box::new(GithubReleaser::new(repo_name));
+        let releaser = GithubReleaser::new(repo_name);
 
         Self::load_or_new(releaser)
     }
@@ -197,7 +199,7 @@ impl Updater<GithubReleaser> {
 
 impl<T> Updater<T>
 where
-    T: Releaser,
+    T: Releaser + Send + 'static,
 {
     /// Create an `Updater` object that will interface with a remote repository for updating operations.
     ///
@@ -223,6 +225,7 @@ where
     /// # env::set_var("alfred_workflow_version", "0.0.0");
     /// # env::set_var("alfred_workflow_name", "NameName");
     ///
+    /// #[derive(Clone)]
     /// struct RemoteCIReleaser {/* inner */};
     ///
     /// // You need to actually implement the trait, following is just a mock.
@@ -261,7 +264,7 @@ where
     where
         S: Into<String>,
     {
-        let releaser = Box::new(Releaser::new(repo_name));
+        let releaser = Releaser::new(repo_name);
         Self::load_or_new(releaser)
     }
 
@@ -389,6 +392,7 @@ where
         // save the result of call to cache file.
         let ask_releaser_for_update = || -> Result<bool, Error> {
             self.releaser
+                .borrow_mut()
                 .latest_version()
                 .and_then(|v| Ok((*self.current_version() < v, v)))
                 .and_then(|(r, v)| {
@@ -426,6 +430,42 @@ where
                 }
             }
         }
+    }
+
+    pub fn update_ready_async(&self) -> Receiver<bool> {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let (tx, rx): (mpsc::Sender<bool>, mpsc::Receiver<bool>) = mpsc::channel();
+        // let releaser = (*self.releaser).clone();
+        let mut releaser = (*self.releaser.borrow()).clone();
+        let current_version = self.current_version().to_string();
+        thread::spawn(move || {
+            let mut x = 0;
+            x += 10;
+            eprintln!("\n--> {}", x);
+            let outcome = releaser.latest_version();
+            if let Ok(v) = outcome {
+                // .and_then(|v| {
+                println!("--> {:?}", v);
+                let my_v = Version::parse(&current_version).unwrap();
+                let m = tx.send(my_v < v);
+                if m.is_ok() {
+                    eprintln!("sent: {}", my_v < v);
+                } else {
+                    eprintln!("err: {:?}", m.unwrap_err());
+                }
+            // Ok(my_v < v)
+            // })
+            } else {
+                eprintln!("releaser error: {:?}", outcome.unwrap_err());
+                // .and_then(|b| Ok(tx.send(b)?));
+            }
+            // .unwrap_or_else(|e| {
+            //     eprintln!("error in getting & sharing latest version: {:?}", e);
+            // });
+        });
+        rx
     }
 
     /// Check if it is time to ask remote server for latest updates.
@@ -499,7 +539,7 @@ where
     /// Downloading latest workflow can fail if network error, file error or Alfred environment variable
     /// errors happen, or if `Releaser` cannot produce a usable download url.
     pub fn download_latest(&self) -> Result<PathBuf, Error> {
-        let url = self.releaser.downloadable_url()?;
+        let url = self.releaser.borrow().downloadable_url()?;
         let client = reqwest::Client::new();
 
         client
@@ -695,7 +735,50 @@ mod tests {
         assert!(updater.download_latest().is_ok());
     }
 
-    pub fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
+    #[test]
+    fn it_tests_async_updates_1() {
+        // This test will wait for the other thread to finish (rx.recv() blocks)
+        setup_workflow_env_vars(true);
+        let _m = setup_mock_server(200);
+
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
+        // Next check will be immediate
+        updater.set_interval(0).unwrap();
+
+        let rx = updater.update_ready_async();
+        let status = rx.recv();
+        assert!(status.is_ok());
+        assert_eq!(true, status.unwrap());
+    }
+
+    #[test]
+    // #[ignore]
+    #[cfg(not(feature = "ci"))]
+    fn it_tests_async_updates_2() {
+        // This test won't wait for the other thread to finish (rx.try_recv() doesn't blocks)
+        // Need to talk to real server to make sure a latency happens.
+        setup_workflow_env_vars(true);
+
+        let mut updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
+        // Next check will be immediate
+        updater.set_interval(0).unwrap();
+
+        let rx = updater.update_ready_async();
+
+        let status = rx.try_recv();
+        // let status = rx.recv();
+        println!("--> {:?}", status);
+        // assert!(status.is_err());
+    }
+    pub(super) fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
         // Mimic Alfred's environment variables
         let path = if secure_temp_dir {
             Builder::new()
