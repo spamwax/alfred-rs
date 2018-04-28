@@ -438,23 +438,28 @@ where
     /// # fn test_async() -> Result<(), Error> {
     /// let mut updater = Updater::gh("some/repo")?;
     ///
-    /// let rx = updater.update_ready_async();
+    /// let rx = updater.update_ready_async().expect("Error in building & spawning worker");
     ///
     /// // We'll do some other work that's related to our workflow while waiting
     /// do_some_other_stuff();
     ///
     /// // We can now check if update is ready using two methods on `rx`:
     /// // 1- Block and wait until it receives results or errors
-    /// let response = rx.recv();
+    /// let communication = rx.recv();
     ///
     /// // 2- Or without blocking, check if thread sent results
-    /// let response = rx.try_recv();
+    /// let communication = rx.try_recv();
     ///
-    /// if response.is_ok() { // Received good result from other thread
-    ///     let update_status = response.unwrap();
-    ///     if let Ok(ready) = update_status {
-    ///         /* update is ready */
+    /// if let Ok(msg) = communication { // Communication with worker thread was successful
+    ///
+    ///     if let Ok(ready) = msg {
+    ///         // No error happened during operation of worker thread and a `msg` containing
+    ///         // the `ready` flag is available.
+    ///         // Use it to see if an update is available or not.
+    ///     } else {
+    ///         /* worker thread wasn't successful */
     ///     }
+    ///
     /// }
     /// # Ok(())
     /// # }
@@ -468,7 +473,7 @@ where
     /// [`Releaser`]: trait.Releaser.html
     /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
-    pub fn update_ready_async(&self) -> Receiver<Result<bool, Error>> {
+    pub fn update_ready_async(&self) -> Result<Receiver<Result<bool, Error>>, Error> {
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
 
@@ -476,28 +481,25 @@ where
 
         if self.last_check().is_none() {
             self.set_last_check(Utc::now());
-            if self.save().is_err() {
-                eprintln!("couldnot save first state of updaater");
-            }
+            self.save()?;
             // This send is always successful
             tx.send(Ok(false)).unwrap();
         } else if self.due_to_check() {
-            self.start_releaser_worker(tx);
+            self.start_releaser_worker(tx)?;
         } else {
             let p: &PathBuf = &env::workflow_data()
                 .ok_or_else(|| err_msg("missing env variable for data dir"))
                 .and_then(|mut dir| {
                     dir.push(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
                     Ok(dir)
-                })
-                .expect("cannot get path to cache fn");
+                })?;
 
             // if we can't read the cache (corrupted or missing which can happen
             // if wf is cancelled while the network call or file operation was undergoing)
             // we make another network call. Otherwise we use its content to report if an
             // update is ready or not until the next due check is upon us.
             match Self::read_last_check_status(p) {
-                Err(_) => self.start_releaser_worker(tx),
+                Err(_) => self.start_releaser_worker(tx)?,
                 Ok(last_check_status) => {
                     // These sends are always successful
                     if let Some(ref last_check_version) = last_check_status {
@@ -509,7 +511,7 @@ where
                 }
             }
         }
-        rx
+        Ok(rx)
     }
 
     /// Check if it is time to ask remote server for latest updates.
@@ -790,7 +792,7 @@ mod tests {
         // Next check will be immediate
         updater.set_interval(0).unwrap();
 
-        let rx = updater.update_ready_async();
+        let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
         let status = rx.recv();
         assert!(status.is_ok());
         assert_eq!(false, status.unwrap().unwrap());
@@ -798,7 +800,8 @@ mod tests {
 
     #[test]
     fn it_tests_async_updates_2() {
-        // This test will not actually spawn a thread since it's not due to check.
+        // This test will only spawn a thread once.
+        // Second call will use a cache since it's not due to check.
         setup_workflow_env_vars(true);
         let _m = setup_mock_server(200);
 
@@ -807,14 +810,24 @@ mod tests {
         {
             // Calling update_ready on first run of workflow will return false since we assume workflow
             // was just downloaded.
-            let r = updater.update_ready_async().recv().unwrap().unwrap();
+            let r = updater
+                .update_ready_async()
+                .unwrap_or_else(|e| panic!(e))
+                .recv()
+                .unwrap() // Unwrap recv-ing operation result
+                .unwrap(); // Unwrap contained msg
             assert_eq!(false, r);
         }
 
         {
             // Next check will spawn a thread. There should be an update avail. from mock server.
             updater.set_interval(0).unwrap();
-            let r = updater.update_ready_async().recv().unwrap().unwrap();
+            let r = updater
+                .update_ready_async()
+                .unwrap_or_else(|e| panic!(e))
+                .recv()
+                .unwrap() // Unwrap recv-ing operation result
+                .unwrap(); // Unwrap contained msg
             assert_eq!(true, r);
         }
 
@@ -825,28 +838,53 @@ mod tests {
             // Increase interval
             updater.set_interval(86400).unwrap();
 
-            let t = updater.update_ready_async().recv().unwrap();
-            assert!(t.is_ok());
+            let t = updater
+                .update_ready_async()
+                .unwrap_or_else(|e| panic!(e))
+                .recv()
+                .unwrap();
+            assert!(t.is_ok()); // No network call was made, otherwise this would've been error
             assert_eq!(true, t.unwrap());
         }
     }
 
     #[test]
+    #[should_panic(expected = "missing env variable for data dir")]
     fn it_tests_async_updates_3() {
-        // This test will not actually spawn a thread since it's not due to check.
         setup_workflow_env_vars(true);
         let _m = setup_mock_server(200);
 
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-        // Ensure we are forced to read status from a cache file rather than making network call.
-        updater.set_interval(60).expect("*1");
-        updater.set_last_check(Utc::now());
+        {
+            // Calling update_ready on first run of workflow will return false since we assume workflow
+            // was just downloaded.
+            let r = updater
+                .update_ready_async()
+                .unwrap_or_else(|e| panic!(e))
+                .recv()
+                .unwrap()
+                .unwrap();
+            assert_eq!(false, r);
+        }
 
-        let rx = updater.update_ready_async();
-        let status = rx.recv();
-        assert!(status.is_ok());
-        assert_eq!(true, status.expect("*2").expect("*3"));
+        // Next check will spawn a thread.
+        {
+            updater.set_interval(0).unwrap();
+            // Introduce a missing env. var. error.
+            StdEnv::remove_var("alfred_workflow_data");
+            let r = updater.update_ready_async();
+
+            // Calling and spawning thread should go ok since there is no cache
+            // file involved yet that needs alfred_workflow_data var.
+            assert!(r.is_ok());
+
+            // However the received msg should contain error since spawned thread
+            // couldn't get alfred_workflow_data var.
+            let msg = r.unwrap().recv().unwrap();
+            assert!(msg.is_err());
+            msg.unwrap();
+        }
     }
 
     #[test]
@@ -862,14 +900,19 @@ mod tests {
         {
             // Calling update_ready on first run of workflow will return false since we assume workflow
             // was just downloaded.
-            let r = updater.update_ready_async().recv().unwrap().unwrap();
+            let r = updater
+                .update_ready_async()
+                .unwrap_or_else(|e| panic!(e))
+                .recv()
+                .unwrap()
+                .unwrap();
             assert_eq!(false, r);
         }
 
         // Next check will be immediate
         updater.set_interval(0).unwrap();
 
-        let rx = updater.update_ready_async();
+        let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
 
         let status = rx.try_recv();
         assert!(status.is_err());

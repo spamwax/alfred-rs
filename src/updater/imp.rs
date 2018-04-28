@@ -90,13 +90,16 @@ where
             })
     }
 
-    pub(super) fn start_releaser_worker(&self, tx: mpsc::Sender<Result<bool, Error>>) {
+    pub(super) fn start_releaser_worker(
+        &self,
+        tx: mpsc::Sender<Result<bool, Error>>,
+    ) -> Result<(), Error> {
         use std::thread;
 
         let mut releaser = (*self.releaser.borrow()).clone();
         let current_version = self.current_version().clone();
-        thread::spawn(move || {
-            let outcome = env::workflow_data()
+        thread::Builder::new().spawn(move || {
+            let outcome: Result<(), Error> = env::workflow_data()
                 .ok_or_else(|| err_msg("missing env variable for data dir"))
                 .and_then(|mut dir| {
                     dir.push(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
@@ -112,11 +115,13 @@ where
                         });
                     Ok(tx.send(update_avail)?)
                 });
-            match outcome {
-                Ok(_) => eprintln!("thread: send success"),
-                Err(e) => eprintln!("thread: sending error: {:?}", e),
+            if let Err(error) = outcome {
+                eprint!("worker outcome is error: {:?}", error);
+                tx.send(Err(error))
+                    .expect("couldnot send error from thread");
             }
-        });
+        })?;
+        Ok(())
     }
     // write version of latest avail. release (if any) to a cache file
     pub(super) fn write_last_check_status(
