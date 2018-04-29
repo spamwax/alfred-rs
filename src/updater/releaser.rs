@@ -13,7 +13,7 @@ const GITHUB_LATEST_RELEASE_ENDPOINT: &str = "/releases/latest";
 #[cfg(test)]
 static MOCKITO_URL: &'static str = mockito::SERVER_URL;
 #[cfg(test)]
-pub const MOCK_RELEASER_REPO_NAME: &str = "MockZnVja29mZg==/fd850fc2e63511e79f720023dfdf24ec";
+pub const MOCK_RELEASER_REPO_NAME: &str = "MockZnVja29mZg==fd850fc2e63511e79f720023dfdf24ec";
 
 /// An interface for checking with remote servers to identify the latest release for an
 /// Alfred workflow.

@@ -68,7 +68,7 @@
 //! // Above will save the state of `Updater` in workflow's data folder.
 //! // Depending on how long has elapsed since first run consequent calls
 //! // to `update_ready()` may return false if it has been less than
-//! // interval set for checking (defaults to 24 hours).
+//! // the interval set for checking (defaults to 24 hours).
 //!
 //! // However in subsequent runs, when the checking interval period has elapsed
 //! // and there actually exists a new release, then `update_ready()` will return true.
@@ -277,7 +277,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust
     /// # extern crate alfred;
     /// # extern crate failure;
     /// # use alfred::Updater;
@@ -313,7 +313,7 @@ where
     /// # Example
     /// Set interval to be 7 days
     ///
-    /// ```rust,no_run
+    /// ```rust
     /// # extern crate alfred;
     /// # use alfred::Updater;
     /// # use std::env;
@@ -527,12 +527,8 @@ where
     /// # extern crate alfred;
     /// # extern crate failure;
     /// # use alfred::Updater;
-    /// # use std::env;
     /// # use failure::Error;
     /// # fn run() -> Result<(), Error> {
-    /// # env::set_var("alfred_workflow_uid", "abcdef");
-    /// # env::set_var("alfred_workflow_data", env::temp_dir());
-    /// # env::set_var("alfred_workflow_version", "0.0.0");
     /// let mut updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
     ///
     /// // Assuming it is has been UPDATE_INTERVAL seconds since last time we ran the
