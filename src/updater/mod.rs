@@ -132,8 +132,6 @@ mod releaser;
 pub use self::releaser::GithubReleaser;
 pub use self::releaser::Releaser;
 
-// TODO: get the load_or_new patch from other branch
-
 /// Default update interval duration 24 hr
 const UPDATE_INTERVAL: i64 = 24 * 60 * 60;
 
@@ -355,13 +353,8 @@ where
         // the workflow.
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN;
 
-        // wf's data dir
-        let p: &PathBuf = &env::workflow_data()
-            .ok_or_else(|| err_msg("missing env variable for data dir"))
-            .and_then(|mut dir| {
-                dir.push(LATEST_UPDATE_INFO_CACHE_FN);
-                Ok(dir)
-            })?;
+        // file for status of last update check
+        let p = &Self::build_data_fn()?.with_file_name(LATEST_UPDATE_INFO_CACHE_FN);
 
         // make a network call to see if a newer version is avail.
         // save the result of call to cache file.
@@ -369,7 +362,7 @@ where
             self.releaser
                 .borrow_mut()
                 .latest_version()
-                .and_then(|v| Ok((*self.current_version() < v, v)))
+                .map(|v| (*self.current_version() < v, v))
                 .and_then(|(r, v)| {
                     Self::write_last_check_status(p, if r { Some(v) } else { None })?;
                     Ok(r)
@@ -390,20 +383,9 @@ where
             // it's time to talk to remote server
             ask_releaser_for_update()
         } else {
-            // if we can't read the cache (corrupted or missing which can happen
-            // if wf is cancelled while the network call or file operation was undergoing)
-            // we make another network call. Otherwise we use its content to report if an
-            // update is ready or not until the next due check is upon us.
-            match Self::read_last_check_status(p) {
-                Err(_) => ask_releaser_for_update(),
-                Ok(last_check_status) => {
-                    if let Some(ref last_check_status) = last_check_status {
-                        Ok(self.current_version() < last_check_status)
-                    } else {
-                        Ok(false)
-                    }
-                }
-            }
+            Self::read_last_check_status(p)
+                .map(|last_check_status| last_check_status.map(|_| true).unwrap_or(false))
+                .or(Ok(false))
         }
     }
 
@@ -617,10 +599,9 @@ mod tests {
     use self::releaser::MOCK_RELEASER_REPO_NAME;
     use super::*;
     use std::ffi::OsStr;
-    #[cfg(not(feature = "ci"))]
-    use std::fs::remove_file;
     use tempfile::Builder;
     const VERSION_TEST: &str = "0.10.5";
+    const VERSION_TEST_NEW: &str = "0.11.1"; // should match what the mock server replies for new version.
 
     #[test]
     fn it_tests_settings_filename() {
@@ -632,27 +613,45 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "ci"))]
     #[test]
-    fn it_loads_last_updater_state() {
+    fn it_ignores_saved_version_after_an_upgrade() {
+        // Make sure a freshly upgraded workflow does not use version info from saved state
         setup_workflow_env_vars(true);
-        let updater_state_fn = Updater::<GithubReleaser>::build_data_fn().unwrap();
+        let _m = setup_mock_server(200);
 
-        let _ = remove_file(&updater_state_fn);
-        assert!(!updater_state_fn.exists());
+        {
+            let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+            assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+            // First update_ready is always false.
+            assert_eq!(
+                false,
+                updater.update_ready().expect("couldn't check for update")
+            );
+        }
 
-        // Create a new Updater, and check if there is an update available
-        let mut updater: Updater<GithubReleaser> =
-            Updater::new("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-        assert!(!updater.update_ready().expect("couldn't check for update"));
-        updater.set_interval(-1).unwrap();
+        {
+            // Next check it reports a new version since mock server has a release for us
+            let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+            updater.set_interval(0);
+            assert_eq!(
+                true,
+                updater.update_ready().expect("couldn't check for update")
+            );
+            assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+        }
 
-        // Now creating another one, will load the updater from file
-        assert!(updater_state_fn.exists());
-        let updater: Updater<GithubReleaser> =
-            Updater::new("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
-        assert_eq!(-1, updater.update_interval())
+        // Mimic the upgrade process by bumping the version
+        StdEnv::set_var("alfred_workflow_version", VERSION_TEST_NEW);
+        {
+            let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+            // Updater should pick up new version rather than using saved one
+            assert_eq!(VERSION_TEST_NEW, format!("{}", updater.current_version()));
+            // No more updates
+            assert_eq!(
+                false,
+                updater.update_ready().expect("couldn't check for update")
+            );
+        }
     }
 
     #[test]
