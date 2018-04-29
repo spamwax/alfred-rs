@@ -104,7 +104,7 @@ impl GithubReleaser {
             .and_then(|resp| {
                 let mut latest: ReleaseItem = serde_json::from_reader(resp)?;
                 if latest.tag_name.starts_with('v') {
-                    latest.tag_name = latest.tag_name.as_str()[1..].to_string();
+                    latest.tag_name.remove(0);
                 }
                 self.latest_release = Some(latest);
                 Ok(())

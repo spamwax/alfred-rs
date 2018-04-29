@@ -326,13 +326,8 @@ where
     /// updater.set_interval(7 * 24 * 60 * 60);
     /// # }
     /// ```
-    ///
-    /// # Errors
-    /// Error will happen during this method if any file io error happens while saving
-    /// the `Updater` data to disk.
-    pub fn set_interval(&mut self, tick: i64) -> Result<(), Error> {
+    pub fn set_interval(&mut self, tick: i64) {
         self.set_update_interval(tick);
-        self.save()
     }
 
     /// Checks if a new update is available.
@@ -674,7 +669,7 @@ mod tests {
         );
 
         // Next check will be immediate
-        updater.set_interval(0).unwrap();
+        updater.set_interval(0);
         let _m = setup_mock_server(400);
         updater.update_ready().unwrap();
     }
@@ -692,7 +687,7 @@ mod tests {
         );
 
         // Next check will be immediate
-        updater.set_interval(0).unwrap();
+        updater.set_interval(0);
 
         assert!(updater.update_ready().expect("couldn't check for update"));
     }
@@ -714,7 +709,7 @@ mod tests {
         assert!(!updater.update_ready().expect("couldn't check for update"));
 
         // Next check will be immediate
-        updater.set_interval(0).unwrap();
+        updater.set_interval(0);
 
         assert!(updater.due_to_check());
         // update should be ready since alfred-pinboard-rs
@@ -724,7 +719,7 @@ mod tests {
         // Download from github
         assert!(updater.download_latest().is_ok());
         // no more updates.
-        updater.set_interval(60).unwrap();
+        updater.set_interval(60);
         assert!(!updater.due_to_check());
     }
 
@@ -741,13 +736,13 @@ mod tests {
         assert!(!updater.update_ready().expect("couldn't check for update"));
 
         // Next check will be immediate
-        updater.set_interval(0).unwrap();
+        updater.set_interval(0);
 
         // Next update_ready will make a network call
         assert!(updater.update_ready().expect("couldn't check for update"));
 
         // Increase interval
-        updater.set_interval(86400).unwrap();
+        updater.set_interval(86400);
         assert!(!updater.due_to_check());
 
         // make mock server return error. This way we can test that no network call was made
@@ -771,7 +766,7 @@ mod tests {
         );
 
         // Next check will be immediate
-        updater.set_interval(0).unwrap();
+        updater.set_interval(0);
         // Force current version to be really old.
         updater.set_version("0.0.1");
         assert!(updater.update_ready().expect("couldn't check for update"));
@@ -786,7 +781,7 @@ mod tests {
 
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
         // Next check will be immediate
-        updater.set_interval(0).unwrap();
+        updater.set_interval(0);
 
         let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
         let status = rx.recv();
@@ -817,7 +812,7 @@ mod tests {
 
         {
             // Next check will spawn a thread. There should be an update avail. from mock server.
-            updater.set_interval(0).unwrap();
+            updater.set_interval(0);
             let r = updater
                 .update_ready_async()
                 .unwrap_or_else(|e| panic!(e))
@@ -832,7 +827,7 @@ mod tests {
             // assuming Updater can read its cache file successfully
             let _m = setup_mock_server(503);
             // Increase interval
-            updater.set_interval(86400).unwrap();
+            updater.set_interval(86400);
 
             let t = updater
                 .update_ready_async()
@@ -866,7 +861,7 @@ mod tests {
 
         // Next check will spawn a thread.
         {
-            updater.set_interval(0).unwrap();
+            updater.set_interval(0);
             // Introduce a missing env. var. error.
             StdEnv::remove_var("alfred_workflow_data");
             let r = updater.update_ready_async();
