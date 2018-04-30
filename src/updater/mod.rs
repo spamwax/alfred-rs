@@ -245,7 +245,7 @@ where
     /// # Errors
     /// Error will happen during calling this method if:
     /// - `Updater` state cannot be read/written during instantiation, or
-    /// - The workflow version cannot be parsed as semantic version compatible identifier.
+    /// - The workflow version cannot be parsed as a semantic version compatible identifier.
     ///
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
     /// [`download_latest()`]: struct.Updater.html#method.download_latest
@@ -324,12 +324,12 @@ where
 
     /// Checks if a new update is available.
     ///
-    /// This method will fetch the latest release information from repository (without a full download)
+    /// This method will fetch the latest release information from repository
     /// and compare it to the current release of the workflow. The repository should
     /// tag each release according to semantic version scheme for this to work.
     ///
     /// The method **will** make a network call to fetch metadata of releases *only if* UPDATE_INTERVAL
-    /// seconds has passed since the last network call, or in rare case of local cache file being corrupted.
+    /// seconds has passed since the last network call.
     ///
     /// All calls, which happen before the UPDATE_INTERVAL seconds, will use a local cache
     /// to report availability of a release.
@@ -337,9 +337,17 @@ where
     /// For `Updater`s talking to `github.com`, this method will only fetch a small metadata file to extract
     /// the version info of the latest release.
     ///
+    /// # Note
+    /// Since this method blocks the current thread until a response is received from remote server,
+    /// workflow authors should consider scenarios where network connection is poor and the block can
+    /// take a long time (>1 second), and devise their workflow around it. An alternative to
+    /// this method is the non-blocking [`update_ready_async()`].
+    ///
     /// # Errors
     /// Checking for update can fail if network error, file error or Alfred environment variable
     /// errors happen.
+    ///
+    /// [`update_ready_async()`]: struct.Updater.html#method.update_ready_async
     pub fn update_ready(&self) -> Result<bool, Error> {
         // A None value for last_check indicates that workflow is being run for first time.
         // Thus we update last_check to now and just save the updater state without asking
@@ -395,17 +403,28 @@ where
 
     /// Checks if a new update is available (non-blocking).
     ///
-    /// The method will spawn a new thread that uses a clone of [`Releaser`] to check for new updates.
-    /// The returned [`Receiver`] value can be use to get the message from the new thread.
+    /// This method will fetch the latest release information from repository
+    /// and compare it to the current release of the workflow. The repository should
+    /// tag each release according to semantic version scheme for this to work.
+    ///
+    /// The spawned thread will attempt to make a network call to fetch metadata of releases
+    /// *only if* UPDATE_INTERVAL seconds has passed since the last network call.
+    ///
+    /// All calls, which happen before the UPDATE_INTERVAL seconds, will use a local cache
+    /// to report availability of a release.
+    ///
+    /// For `Updater`s talking to `github.com`, this method will only fetch a small metadata information
+    /// to extract the version of the latest release.
     ///
     /// ## Note
-    /// The spawned method will attempt to fetch the latest release information from repository. Unlike
-    /// [update_ready()](struct.Updater.html#method.update_ready), it will *only* use the timestamp since
-    /// last check to decide if a network call should be made.
+    /// Unlike [`update_ready()`], this method does not block the current thread. In order to use the
+    /// possible result produced by the spawned thread, you need to call either [`recv()`] (blocking) or
+    /// [`try_recv()`] (non-blocking) method of the returned `Receiver` before your application's
+    /// `main()` exits.
     ///
-    /// This means it's possible that on every invocation of workflow a network call could be made. Thus
-    /// it is your responsibility (as workflow author) to ensure that unnecessary and repeated *notifications*
-    /// are not presented to user.
+    /// Note that the worker thread may not have been done by the time you call [`try_recv()`], which
+    /// results a no-response error and the main thread continuing its normal execution without blocking.
+    ///
     ///
     /// # Example
     ///
@@ -428,7 +447,8 @@ where
     /// // 1- Block and wait until it receives results or errors
     /// let communication = rx.recv();
     ///
-    /// // 2- Or without blocking, check if thread sent results
+    /// // 2- Or without blocking, check if the worker thread sent the results.
+    /// //    If the worker thread is still busy, the `communication` will be an `Err`
     /// let communication = rx.try_recv();
     ///
     /// if let Ok(msg) = communication { // Communication with worker thread was successful
@@ -451,6 +471,9 @@ where
     /// [`Releaser`]: trait.Releaser.html
     /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
     /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
+    /// [`update_ready()`]: struct.Updater.html#method.update_ready
+    /// [`recv()`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.recv
+    /// [`try_recv()`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.try_recv
     pub fn update_ready_async(&self) -> Result<Receiver<Result<bool, Error>>, Error> {
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
@@ -507,8 +530,6 @@ where
     ///
     /// // Assuming it is has been UPDATE_INTERVAL seconds since last time we ran the
     /// // `update_ready()`:
-    /// # updater.update_ready();
-    /// # updater.set_interval(0);
     /// assert_eq!(true, updater.due_to_check());
     /// # Ok(())
     /// # }

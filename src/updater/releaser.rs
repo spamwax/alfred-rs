@@ -40,6 +40,10 @@ pub trait Releaser: Clone {
 }
 
 /// Struct to handle checking and finding release files from `github.com`
+///
+/// This implementation of `Releaser` will favor files that end with `alfred3workflow`
+/// over `alfredworkflow`. If there are multiple `alfred3workflow`s or `alfredworkflow`s, the first
+/// one returned by `github.com` will be used.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GithubReleaser {
     repo: String,
