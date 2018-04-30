@@ -128,8 +128,7 @@ mod releaser;
 pub use self::releaser::GithubReleaser;
 pub use self::releaser::Releaser;
 
-/// Default update interval duration 24 hr
-const UPDATE_INTERVAL: i64 = 24 * 60 * 60;
+use self::imp::default_interval;
 
 /// Struct to check for & download the latest release of workflow from a remote server.
 pub struct Updater<T>
@@ -144,6 +143,7 @@ where
 struct UpdaterState {
     current_version: Version,
     last_check: Cell<Option<DateTime<Utc>>>,
+    #[serde(skip, default = "default_interval")]
     update_interval: i64,
 }
 

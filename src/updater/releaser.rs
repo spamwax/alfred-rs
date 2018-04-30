@@ -7,6 +7,7 @@ use semver::Version;
 use serde_json;
 use url::Url;
 
+#[cfg(not(test))]
 const GITHUB_API_URL: &str = "https://api.github.com/repos/";
 const GITHUB_LATEST_RELEASE_ENDPOINT: &str = "/releases/latest";
 
@@ -69,14 +70,7 @@ impl GithubReleaser {
         let client = reqwest::Client::new();
 
         #[cfg(test)]
-        let url = if self.repo == MOCK_RELEASER_REPO_NAME {
-            format!("{}{}", MOCKITO_URL, GITHUB_LATEST_RELEASE_ENDPOINT)
-        } else {
-            format!(
-                "{}{}{}",
-                GITHUB_API_URL, self.repo, GITHUB_LATEST_RELEASE_ENDPOINT
-            )
-        };
+        let url = format!("{}{}", MOCKITO_URL, GITHUB_LATEST_RELEASE_ENDPOINT);
 
         #[cfg(not(test))]
         let url = format!(
