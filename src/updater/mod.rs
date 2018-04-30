@@ -445,6 +445,9 @@ where
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
 
+        // file for status of last update check
+        let p = Self::build_data_fn()?.with_file_name(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
+
         let (tx, rx) = mpsc::channel();
 
         if self.last_check().is_none() {
@@ -453,31 +456,14 @@ where
             // This send is always successful
             tx.send(Ok(false)).unwrap();
         } else if self.due_to_check() {
-            self.start_releaser_worker(tx)?;
+            // it's time to talk to remote server
+            self.start_releaser_worker(tx, p)?;
         } else {
-            let p: &PathBuf = &env::workflow_data()
-                .ok_or_else(|| err_msg("missing env variable for data dir"))
-                .and_then(|mut dir| {
-                    dir.push(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
-                    Ok(dir)
-                })?;
-
-            // if we can't read the cache (corrupted or missing which can happen
-            // if wf is cancelled while the network call or file operation was undergoing)
-            // we make another network call. Otherwise we use its content to report if an
-            // update is ready or not until the next due check is upon us.
-            match Self::read_last_check_status(p) {
-                Err(_) => self.start_releaser_worker(tx)?,
-                Ok(last_check_status) => {
-                    // These sends are always successful
-                    if let Some(ref last_check_version) = last_check_status {
-                        tx.send(Ok(self.current_version() < last_check_version))
-                            .unwrap();
-                    } else {
-                        tx.send(Ok(false)).unwrap();
-                    }
-                }
-            }
+            let status = Self::read_last_check_status(&p)
+                .map(|last_check_status| last_check_status.map(|_| true).unwrap_or(false))
+                .or(Ok(false));
+            // This send is always successful
+            tx.send(status).unwrap();
         }
         Ok(rx)
     }
@@ -804,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "missing env variable for data dir")]
+    #[should_panic(expected = "ServerError(InternalServerError)")]
     fn it_tests_async_updates_3() {
         setup_workflow_env_vars(true);
         let _m = setup_mock_server(200);
@@ -826,16 +812,15 @@ mod tests {
         // Next check will spawn a thread.
         {
             updater.set_interval(0);
-            // Introduce a missing env. var. error.
-            StdEnv::remove_var("alfred_workflow_data");
+            // Introduce a server error
+            let _m = setup_mock_server(500);
             let r = updater.update_ready_async();
 
-            // Calling and spawning thread should go ok since there is no cache
-            // file involved yet that needs alfred_workflow_data var.
+            // Calling and spawning thread should go ok
             assert!(r.is_ok());
 
             // However the received msg should contain error since spawned thread
-            // couldn't get alfred_workflow_data var.
+            // will get a 500 error from server
             let msg = r.unwrap().recv().unwrap();
             assert!(msg.is_err());
             msg.unwrap();

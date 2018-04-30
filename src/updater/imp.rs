@@ -1,5 +1,3 @@
-use super::Error;
-use super::Releaser;
 use super::*;
 use std::sync::mpsc;
 use Updater;
@@ -96,27 +94,24 @@ where
     pub(super) fn start_releaser_worker(
         &self,
         tx: mpsc::Sender<Result<bool, Error>>,
+        p: PathBuf,
     ) -> Result<(), Error> {
         use std::thread;
 
         let mut releaser = (*self.releaser.borrow()).clone();
         let current_version = self.current_version().clone();
+
         thread::Builder::new().spawn(move || {
-            let outcome: Result<(), Error> = env::workflow_data()
-                .ok_or_else(|| err_msg("missing env variable for data dir"))
-                .and_then(|mut dir| {
-                    dir.push(LATEST_UPDATE_INFO_CACHE_FN_ASYNC);
-                    Ok(dir)
+            let outcome = releaser
+                .latest_version()
+                .map(|v| (current_version < v, v))
+                .and_then(|(r, v)| {
+                    tx.send(Ok(r))?;
+                    Ok((r, v))
                 })
-                .and_then(|p| {
-                    let update_avail = releaser
-                        .latest_version()
-                        .and_then(|v| Ok((current_version < v, v)))
-                        .and_then(|(r, v)| {
-                            Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
-                            Ok(r)
-                        });
-                    Ok(tx.send(update_avail)?)
+                .and_then(|(r, v)| {
+                    Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
+                    Ok(())
                 });
             if let Err(error) = outcome {
                 eprint!("worker outcome is error: {:?}", error);
