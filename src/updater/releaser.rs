@@ -64,18 +64,6 @@ struct ReleaseAsset {
     browser_download_url: String,
 }
 
-impl<S> From<S> for GithubReleaser
-where
-    S: Into<String>,
-{
-    fn from(s: S) -> Self {
-        GithubReleaser {
-            repo: s.into(),
-            latest_release: None,
-        }
-    }
-}
-
 impl GithubReleaser {
     fn latest_release_data(&mut self) -> Result<(), Error> {
         let client = reqwest::Client::new();
@@ -114,7 +102,10 @@ impl GithubReleaser {
 
 impl Releaser for GithubReleaser {
     fn new<S: Into<String>>(repo_name: S) -> GithubReleaser {
-        From::from(repo_name)
+        GithubReleaser {
+            repo: repo_name.into(),
+            latest_release: None,
+        }
     }
 
     // This implementation of Releaser will favor urls that end with `alfred3workflow`

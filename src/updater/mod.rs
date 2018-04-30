@@ -115,7 +115,7 @@ use serde_json;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::env as StdEnv;
-use std::fs::{create_dir_all, File};
+use std::fs::{create_dir_all, remove_file, File};
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -558,26 +558,31 @@ where
             .error_for_status()
             .map_err(|e| e.into())
             .and_then(|mut resp| {
-                env::workflow_cache() // Get workflow's dedicated cache folder
+                // Get workflow's dedicated cache folder & build a filename
+                let latest_release_downloaded_fn = env::workflow_cache()
                     .ok_or_else(|| err_msg("missing env variable for cache dir"))
                     .and_then(|mut cache_dir| {
                         env::workflow_uid()
                             .ok_or_else(|| err_msg("missing env variable for uid"))
-                            .and_then(|ref uid| { // Build file name for the downloaded data
+                            .and_then(|ref uid| {
                                 cache_dir
                                     .push(["latest_release_", uid, ".alfredworkflow"].concat());
                                 Ok(cache_dir)
                             })
+                    })?;
+                // Save the file
+                File::create(&latest_release_downloaded_fn)
+                    .map_err(|e| e.into())
+                    .and_then(|fp| {
+                        let mut buf_writer = BufWriter::with_capacity(0x10_0000, fp);
+                        resp.copy_to(&mut buf_writer)?;
+                        Ok(())
                     })
-                    .and_then(|latest_release_downloaded_fn| {
-                        File::create(&latest_release_downloaded_fn) // Save downloaded data
-                            .map_err(|e| e.into())
-                            .and_then(|fp| {
-                                let mut buf_writer = BufWriter::with_capacity(0x10_0000, fp);
-                                resp.copy_to(&mut buf_writer)?;
-                                Ok(latest_release_downloaded_fn)
-                            })
-                    })
+                    .or_else(|e: Error| {
+                        let _ = remove_file(&latest_release_downloaded_fn);
+                        Err(e)
+                    })?;
+                Ok(latest_release_downloaded_fn)
             })
     }
 }

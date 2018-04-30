@@ -77,16 +77,19 @@ where
     }
 
     pub(super) fn save(&self) -> Result<(), Error> {
-        Self::build_data_fn()
-            .and_then(|data_file_path| {
-                create_dir_all(data_file_path.parent().unwrap())?;
-                Ok(data_file_path)
-            })
-            .and_then(|data_file_path| Ok(File::create(data_file_path)?))
+        let data_file_path = Self::build_data_fn().and_then(|data_file_path| {
+            create_dir_all(data_file_path.parent().unwrap())?;
+            Ok(data_file_path)
+        })?;
+        File::create(&data_file_path)
             .and_then(|fp| {
                 let buf_writer = BufWriter::with_capacity(128, fp);
                 serde_json::to_writer(buf_writer, &self.state)?;
                 Ok(())
+            })
+            .or_else(|e| {
+                let _ = remove_file(data_file_path);
+                Err(e.into())
             })
     }
 
@@ -123,16 +126,22 @@ where
         })?;
         Ok(())
     }
+
     // write version of latest avail. release (if any) to a cache file
     pub(super) fn write_last_check_status(
         p: &PathBuf,
         version: Option<Version>,
     ) -> Result<(), Error> {
-        File::create(p).and_then(|fp| {
-            let buf_writer = BufWriter::with_capacity(128, fp);
-            serde_json::to_writer(buf_writer, &version)?;
-            Ok(())
-        })?;
+        File::create(p)
+            .and_then(|fp| {
+                let buf_writer = BufWriter::with_capacity(128, fp);
+                serde_json::to_writer(buf_writer, &version)?;
+                Ok(())
+            })
+            .or_else(|e| {
+                let _ = remove_file(p);
+                Err(e)
+            })?;
         Ok(())
     }
 
