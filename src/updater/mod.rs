@@ -377,8 +377,18 @@ where
             // it's time to talk to remote server
             ask_releaser_for_update()
         } else {
-            Self::read_last_check_status(p)
-                .map(|last_check_status| last_check_status.map(|_| true).unwrap_or(false))
+            Self::read_last_check_status(&p)
+                .map(|last_check_status| {
+                    last_check_status
+                        .map(|ref last_saved_version| {
+                            if self.current_version() < last_saved_version {
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .unwrap_or(false)
+                })
                 .or(Ok(false))
         }
     }
@@ -460,7 +470,17 @@ where
             self.start_releaser_worker(tx, p)?;
         } else {
             let status = Self::read_last_check_status(&p)
-                .map(|last_check_status| last_check_status.map(|_| true).unwrap_or(false))
+                .map(|last_check_status| {
+                    last_check_status
+                        .map(|ref last_saved_version| {
+                            if self.current_version() < last_saved_version {
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .unwrap_or(false)
+                })
                 .or(Ok(false));
             // This send is always successful
             tx.send(status).unwrap();
@@ -596,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn it_ignores_saved_version_after_an_upgrade() {
+    fn it_ignores_saved_version_after_an_upgrade_1() {
         // Make sure a freshly upgraded workflow does not use version info from saved state
         setup_workflow_env_vars(true);
         let _m = setup_mock_server(200);
@@ -632,6 +652,57 @@ mod tests {
             assert_eq!(
                 false,
                 updater.update_ready().expect("couldn't check for update")
+            );
+        }
+    }
+
+    #[test]
+    fn it_ignores_saved_version_after_an_upgrade_2() {
+        // Make sure a freshly upgraded workflow does not use version info from saved state
+        setup_workflow_env_vars(true);
+        let _m = setup_mock_server(200);
+
+        {
+            let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+            assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+            // First update_ready is always false.
+            assert_eq!(
+                false,
+                updater.update_ready().expect("couldn't check for update")
+            );
+        }
+
+        {
+            // Next check it reports a new version since mock server has a release for us
+            let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+            updater.set_interval(0);
+            assert_eq!(
+                true,
+                updater
+                    .update_ready_async()
+                    .unwrap()
+                    .recv()
+                    .unwrap()
+                    .expect("couldn't check for update")
+            );
+            assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+        }
+
+        // Mimic the upgrade process by bumping the version
+        StdEnv::set_var("alfred_workflow_version", VERSION_TEST_NEW);
+        {
+            let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+            // Updater should pick up new version rather than using saved one
+            assert_eq!(VERSION_TEST_NEW, format!("{}", updater.current_version()));
+            // No more updates
+            assert_eq!(
+                false,
+                updater
+                    .update_ready_async()
+                    .unwrap()
+                    .recv()
+                    .unwrap()
+                    .expect("couldn't check for update")
             );
         }
     }
