@@ -599,7 +599,7 @@ mod tests {
         setup_workflow_env_vars(true);
         let updater_state_fn = Updater::<GithubReleaser>::build_data_fn().unwrap();
         assert_eq!(
-            "workflow.B0AC54EC-601C-YouForgotTo___NameYourOwnWork_flow_-updater.json",
+            "workflow.B0AC54EC-601C-YouForgotTo___Name_Your_Own_Work_flow_-updater.json",
             updater_state_fn.file_name().unwrap().to_str().unwrap()
         );
     }
@@ -682,44 +682,13 @@ mod tests {
         assert!(updater.update_ready().expect("couldn't check for update"));
     }
 
-    #[cfg(not(feature = "ci"))]
-    #[ignore]
     #[test]
-    fn it_talks_to_github() {
-        setup_workflow_env_vars(true);
-
-        let mut updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-
-        assert!(updater.last_check().is_none());
-        assert!(updater.due_to_check());
-
-        // Calling update_ready on first run of workflow will return false since we assume workflow
-        // was just downloaded.
-        assert!(!updater.update_ready().expect("couldn't check for update"));
-
-        // Next check will be immediate
-        updater.set_interval(0);
-
-        assert!(updater.due_to_check());
-        // update should be ready since alfred-pinboard-rs
-        // already has newer than VERSION_TEST.
-        assert!(updater.update_ready().expect("couldn't check for update"));
-
-        // Download from github
-        assert!(updater.download_latest().is_ok());
-        // no more updates.
-        updater.set_interval(60);
-        assert!(!updater.due_to_check());
-    }
-
-    #[test]
-    #[cfg(not(feature = "ci"))]
+    // #[cfg(not(feature = "ci"))]
     fn it_does_one_network_call_per_interval() {
         setup_workflow_env_vars(true);
         let _m = setup_mock_server(200);
 
-        let mut updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
         // Calling update_ready on first run of workflow will return false since we assume workflow
         // was just downloaded.
@@ -868,37 +837,6 @@ mod tests {
         }
     }
 
-    #[test]
-    // #[ignore]
-    #[cfg(not(feature = "ci"))]
-    fn it_tests_async_updates_4() {
-        // This test won't wait for the other thread to finish (rx.try_recv() doesn't blocks)
-        // Need to talk to real server to make sure a latency happens.
-        setup_workflow_env_vars(true);
-
-        let mut updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot build Updater");
-
-        {
-            // Calling update_ready on first run of workflow will return false since we assume workflow
-            // was just downloaded.
-            let r = updater
-                .update_ready_async()
-                .unwrap_or_else(|e| panic!(e))
-                .recv()
-                .unwrap()
-                .unwrap();
-            assert_eq!(false, r);
-        }
-
-        // Next check will be immediate
-        updater.set_interval(0).unwrap();
-
-        let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
-
-        let status = rx.try_recv();
-        assert!(status.is_err());
-    }
-
     pub(super) fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
         // Mimic Alfred's environment variables
         let path = if secure_temp_dir {
@@ -918,15 +856,10 @@ mod tests {
             StdEnv::set_var("alfred_workflow_uid", "workflow.B0AC54EC-601C");
             StdEnv::set_var(
                 "alfred_workflow_name",
-                "YouForgotTo/フ:NameYourOwnWork}flowッ",
+                "YouForgotTo/フ:Name好YouráOwnسWork}flowッ",
             );
             StdEnv::set_var("alfred_workflow_bundleid", "MY_BUNDLE_ID");
             StdEnv::set_var("alfred_workflow_version", VERSION_TEST);
-            // println!(
-            //     "\ndata: {:#?}\ncache: {:#?}",
-            //     env::workflow_data().unwrap(),
-            //     env::workflow_cache().unwrap()
-            // );
         }
         path
     }
