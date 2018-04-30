@@ -117,9 +117,9 @@ where
                     Ok(())
                 });
             if let Err(error) = outcome {
-                eprint!("worker outcome is error: {:?}", error);
+                print!("worker outcome is error: {:?}", error);
                 tx.send(Err(error))
-                    .expect("couldnot send error from thread");
+                    .expect("could not send error from thread");
             }
         })?;
         Ok(())

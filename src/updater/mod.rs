@@ -1,18 +1,24 @@
 //! Helper for enabling Alfred workflows to upgrade themselves periodically (Alfred 3)
 //!
-//! Enable this feature by adding it in your `Cargo.toml`:
+//! Enable this feature by adding it to your `Cargo.toml`:
 //!
 //! ```toml
 //! alfred = { version = "4", features = ["updater"] }
 //! ```
-//! Using this module, the workflow author will be able to make Alfred
-//! check for & download latest releases from the remote server
-//! within adjustable intervals (default is 24 hrs).
+//! Using this module, the workflow author can make Alfred check for latest releases from a remote
+//! server within adjustable intervals ([`update_ready_async()`] or [`update_ready()`])
+//! (default is 24 hrs).
 //!
-//! For convenience, an associated method [`Updater::gh()`] is available to check for workflows hosted on `github.com`.
+//! Additionally they can ask Alfred to download the new release to its cache folder for further
+//! action [`download_latest()`].
+//!
+//! For convenience, an associated method [`Updater::gh()`] is available to check
+//! for workflows hosted on `github.com`.
 //!
 //! However, it's possible to check with other servers as long as the [`Releaser`] trait is
 //! implemented for the desired remote service.
+//! See [`Updater::new()`] documentation if you are hosting your workflow
+//! on non a `github.com` service.
 //!
 //! The `github.com` hosted repository should have release items following `github`'s process.
 //! This can be done by tagging a commit and then manually building a release where you
@@ -25,13 +31,22 @@
 //! You can easily create `YourWorkflow.alfredworkflow` file by using the [export feature] of
 //! Alfred in its preferences window.
 //!
-//! ### Note to workflow authors
-//! - Workflow authors should make sure that _released_ workflow files have
-//! their version set in [Alfred's preferences window].
-//! - However, this module provides [`set_version()`] to set the vesion during runtime.
+//! ## Note to workflow authors
+//! - Depending on network quality, checking if an update is available may take a long time.
+//! This module can spawn a worker thread so the check does not block the main flow of your plugin.
+//! However given the limitations of Alfred's plugin architecture, the worker thread cannot outlive
+//! your plugin's executable. This means that you either have to wait/block for the worker thread,
+//! or if it is taking longer than a desirable time, you will have to abandon it.
+//! See the example for more details.
+//! - Workflow authors should make sure that _released_ workflow bundles have
+//! their version set in [Alfred's preferences window]. However, this module provides
+//! [`set_version()`] to set the version during runtime.
 //!
 //! [`Releaser`]: trait.Releaser.html
 //! [`Updater`]: struct.Updater.html
+//! [`update_ready()`]: struct.Updater.html#method.update_ready
+//! [`update_ready_async()`]: struct.Updater.html#method.update_ready_async
+//! [`download_latest()`]: struct.Updater.html#method.download_latest
 //! [`Updater::gh()`]: struct.Updater.html#method.gh
 //! [`Updater::new()`]: struct.Updater.html#method.new
 //! [semantic versioning]: https://semver.org
@@ -49,62 +64,71 @@
 //! ```rust,no_run
 //! # extern crate alfred;
 //! # extern crate failure;
-//! use alfred::Updater;
+//! use alfred::{Item, ItemBuilder, Updater, json};
+//! use std::thread;
+//! use std::time::Duration;
 //!
-//! # use failure::Error;
 //! # use std::io;
-//! # fn run() -> Result<(), Error> {
-//! let updater =
-//!     Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
+//! # use failure::Error;
+//! # fn produce_items_for_user_to_see<'a>() -> Vec<Item<'a>> {
+//! #     Vec::new()
+//! # }
+//! # fn do_some_other_stuff() {}
+//! fn run<'a>() -> Result<Vec<Item<'a>>, Error> {
+//!     let updater = Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
 //!
-//! // The very first call to `update_ready()` will return `false`
-//! // since it's assumed that user has just downloaded the workflow.
-//! assert_eq!(false, updater.update_ready().unwrap());
+//!     // If it has been more than UPDATE_INTERVAL since we last checked,
+//!     // the method will spawn a worker thread to check for updates.
+//!     // Otherwise it will use a cache and immediately send results to `rx`
+//!     let rx = updater
+//!         .update_ready_async()
+//!         .expect("Error in building & spawning worker");
 //!
-//! // Above will save the state of `Updater` in workflow's data folder.
-//! // Depending on how long has elapsed since first run consequent calls
-//! // to `update_ready()` may return false if it has been less than
-//! // the interval set for checking (defaults to 24 hours).
+//!     // We'll do some other work that's related to our workflow while waiting:
+//!     do_some_other_stuff();
+//!     let mut items: Vec<Item> = produce_items_for_user_to_see();
 //!
-//! // However in subsequent runs, when the checking interval period has elapsed
-//! // and there actually exists a new release, then `update_ready()` will return true.
-//! // In this case, one can download the latest available release
-//! // to the workflow's default cache folder.
-//! if updater.update_ready().unwrap() {
-//!     match updater.download_latest() {
-//!         Ok(downloaded_fn) => {
-//!           alfred::json::write_items(io::stdout(), &[
-//!               alfred::ItemBuilder::new("New version of workflow is available!")
-//!                                    .subtitle("Click to upgrade!")
-//!                                    .arg(downloaded_fn.to_str().unwrap())
-//!                                    .variable("update_ready", "yes")
-//!                                    .valid(true)
-//!                                    .into_item()
-//!           ]);
-//!           Ok(())
-//!         },
-//!         Err(e) => {
-//!             // Show an error message to user or log it.
-//!             # Err(e)
+//!     let mut communication;
+//!     // 1: We can check if worker thread is done without blocking
+//!     {
+//!         communication = rx.try_recv();
+//!     }
+//!     // Or:
+//!     // 2: Optionally wait for 1 second and then check without blocking
+//!     {
+//!         let one_second = Duration::from_millis(1000);
+//!         thread::sleep(one_second);
+//!         communication = rx.try_recv();
+//!     }
+//!
+//!     match communication {
+//!         Ok(msg) => {
+//!             // Communication with worker thread was successful
+//!             if let Ok(is_ready) = msg {
+//!                 // Worker thread successfully fetched us release info. from github
+//!                 if is_ready {
+//!                     let update_item = ItemBuilder::new(
+//!                         "New version is available!"
+//!                     ).into_item();
+//!                     items.push(update_item);
+//!                 }
+//!             }
 //!         }
+//!         Err(_) => { /* worker thread wasn't successful */ }
+//!     }
+//!     Ok(items)
+//! }
+//!
+//! fn main() {
+//!     if let Ok(ref items) = run() {
+//!         json::write_items(io::stdout(), items);
 //!     }
 //! }
-//! #    else {
-//! #        Ok(())
-//! #    }
-//! # }
-//!
-//! # fn main() {}
 //! ```
 //!
-//! For the above example to automatically work, you then need to connect the output of the script
-//! to an **Open File** action so that Alfred can install/upgrade the new version.
-//!
-//! As suggested in above example, you can add an Alfred variable to the item so that your workflow
-//! can use it for further processing.
-//!
-//! See [`Updater::new()`] documentation if you are hosting your workflow on a service other than
-//! `github.com` for an example of how to do it.
+//! An *issue* with above example can be when user is on a poor network or server is unresponsive.
+//! In this case, the above snippet will try to call server every time workflow is invoked
+//! by Alfred until the operation succeeds.
 
 use chrono::prelude::*;
 use env;
@@ -121,7 +145,6 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use time::Duration;
 
-#[allow(missing_docs)]
 mod imp;
 mod releaser;
 
@@ -562,7 +585,7 @@ where
     /// let mut updater = Updater::gh("kballard/alfred-rs")?;
     ///
     /// // Assuming it is has been UPDATE_INTERVAL seconds since last time we ran the
-    /// // `update_ready()`:
+    /// // `update_ready()` and there actually exists a new release:
     /// assert_eq!(true, updater.due_to_check());
     /// # Ok(())
     /// # }
