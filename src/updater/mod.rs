@@ -42,24 +42,20 @@
 //!
 //! # Example
 //!
-//! Create an updater for a workflow hosted on `github.com/spamwax/alfred-pinboard-rs`.
+//! Create an updater for a workflow hosted on `github.com/kballard/alfred-rs`.
 //! By default, it will check for new releases every 24 hours.
 //! To change the interval, use [`set_interval()`] method.
 //!
-//! ```rust
+//! ```rust,no_run
 //! # extern crate alfred;
 //! # extern crate failure;
 //! use alfred::Updater;
 //!
-//! # use std::env;
 //! # use failure::Error;
 //! # use std::io;
 //! # fn run() -> Result<(), Error> {
-//! # env::set_var("alfred_workflow_uid", "abcdef");
-//! # env::set_var("alfred_workflow_data", env::temp_dir());
-//! # env::set_var("alfred_workflow_version", "0.0.0");
 //! let updater =
-//!     Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
+//!     Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
 //!
 //! // The very first call to `update_ready()` will return `false`
 //! // since it's assumed that user has just downloaded the workflow.
@@ -161,14 +157,12 @@ impl Updater<GithubReleaser> {
     /// # extern crate alfred;
     /// use alfred::Updater;
     /// # use std::env;
-    /// # fn ex_new() {
+    /// # fn main() {
     /// # env::set_var("alfred_workflow_uid", "abcdef");
     /// # env::set_var("alfred_workflow_data", env::temp_dir());
     /// # env::set_var("alfred_workflow_version", "0.0.0");
-    /// let updater = Updater::gh("user_name/repo_name").expect("cannot initiate Updater");
+    /// let updater = Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
     /// # }
-    /// #
-    /// # fn main() {}
     /// ```
     ///
     /// This only creates an `Updater` without performing any network operations.
@@ -285,7 +279,7 @@ where
     /// # env::set_var("alfred_workflow_uid", "abcdef");
     /// # env::set_var("alfred_workflow_data", env::temp_dir());
     /// # env::set_var("alfred_workflow_version", "0.0.0");
-    /// let mut updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
+    /// let mut updater = Updater::gh("kballard/alfred-rs")?;
     /// updater.set_version("0.23.3");
     /// # Ok(())
     /// # }
@@ -320,7 +314,7 @@ where
     /// # env::set_var("alfred_workflow_data", env::temp_dir());
     /// # env::set_var("alfred_workflow_version", "0.0.0");
     /// let mut updater =
-    ///     Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
+    ///     Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
     /// updater.set_interval(7 * 24 * 60 * 60);
     /// # }
     /// ```
@@ -405,7 +399,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// # extern crate alfred;
     /// # extern crate failure;
     /// # use failure::Error;
@@ -413,7 +407,7 @@ where
     /// # use std::env;
     /// # fn do_some_other_stuff() {}
     /// # fn test_async() -> Result<(), Error> {
-    /// let mut updater = Updater::gh("some/repo")?;
+    /// let mut updater = Updater::gh("kballard/alfred-rs")?;
     ///
     /// let rx = updater.update_ready_async().expect("Error in building & spawning worker");
     ///
@@ -441,9 +435,6 @@ where
     /// # Ok(())
     /// # }
     /// # fn main() {
-    /// # env::set_var("alfred_workflow_uid", "abcdef");
-    /// # env::set_var("alfred_workflow_data", env::temp_dir());
-    /// # env::set_var("alfred_workflow_version", "0.0.0");
     /// # test_async();
     /// # }
     /// ```
@@ -506,7 +497,7 @@ where
     /// # use alfred::Updater;
     /// # use failure::Error;
     /// # fn run() -> Result<(), Error> {
-    /// let mut updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
+    /// let mut updater = Updater::gh("kballard/alfred-rs")?;
     ///
     /// // Assuming it is has been UPDATE_INTERVAL seconds since last time we ran the
     /// // `update_ready()`:
