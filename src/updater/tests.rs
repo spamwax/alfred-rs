@@ -59,60 +59,53 @@ fn it_ignores_saved_version_after_an_upgrade() {
     }
 }
 
-// #[test]
-// fn it_ignores_saved_version_after_an_upgrade_async() {
-//     // Make sure a freshly upgraded workflow does not use version info from saved state
-//     setup_workflow_env_vars(true);
-//     let _m = setup_mock_server(200);
+#[test]
+fn it_ignores_saved_version_after_an_upgrade_async() {
+    // Make sure a freshly upgraded workflow does not use version info from saved state
+    setup_workflow_env_vars(true);
+    let _m = setup_mock_server(200);
 
-//     {
-//         let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-//         assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-//         // First update_ready is always false.
-//         assert_eq!(
-//             false,
-//             updater.update_ready().expect("couldn't check for update")
-//         );
-//     }
+    {
+        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+        // First update_ready is always false.
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
+    }
 
-//     {
-//         // Next check it reports a new version since mock server has a release for us
-//         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-//         updater.set_interval(0);
-//         assert_eq!(
-//             true,
-//             updater
-//                 .update_ready_async()
-//                 .unwrap()
-//                 .recv()
-//                 .unwrap()
-//                 .expect("couldn't check for update")
-//         );
-//         assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-//     }
+    {
+        // Next check it reports a new version since mock server has a release for us
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        updater.set_interval(0);
+        updater.init().expect("couldn't init worker");
 
-//     // Mimic the upgrade process by bumping the version
-//     StdEnv::set_var("alfred_workflow_version", VERSION_TEST_NEW);
-//     {
-//         let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-//         // Updater should pick up new version rather than using saved one
-//         assert_eq!(VERSION_TEST_NEW, format!("{}", updater.current_version()));
-//         // No more updates
-//         assert_eq!(
-//             false,
-//             updater
-//                 .update_ready_async()
-//                 .unwrap()
-//                 .recv()
-//                 .unwrap()
-//                 .expect("couldn't check for update")
-//         );
-//     }
-// }
+        assert_eq!(
+            true,
+            updater.update_ready().expect("couldn't check for update")
+        );
+        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+    }
+
+    // Mimic the upgrade process by bumping the version
+    StdEnv::set_var("alfred_workflow_version", VERSION_TEST_NEW);
+    {
+        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        // Updater should pick up new version rather than using saved one
+        assert_eq!(VERSION_TEST_NEW, format!("{}", updater.current_version()));
+        updater.init().expect("couldn't init worker");
+        // No more updates
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
+    }
+}
 
 #[test]
 #[should_panic(expected = "ClientError(BadRequest)")]
-fn it_handles_server_error_1() {
+fn it_handles_server_error() {
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
 
@@ -126,7 +119,36 @@ fn it_handles_server_error_1() {
     // Next check will be immediate
     updater.set_interval(0);
     let _m = setup_mock_server(400);
+    // This should panic with a BadRequest (400) error.
     updater.update_ready().unwrap();
+}
+
+#[test]
+#[should_panic(expected = "ClientError(BadRequest)")]
+fn it_handles_server_error_async() {
+    setup_workflow_env_vars(true);
+
+    {
+        let _m = setup_mock_server(200);
+        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+        updater.init().expect("couldn't init worker");
+        // First update_ready is always false.
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
+    }
+
+    {
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        // Next check will be immediate
+        updater.set_interval(0);
+        updater.init().expect("couldn't init worker");
+        let _m = setup_mock_server(400);
+        // This should panic with a BadRequest (400) error.
+        updater.update_ready().unwrap();
+    }
 }
 
 #[test]
@@ -134,17 +156,30 @@ fn it_get_latest_info_from_releaser() {
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
 
-    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    {
+        // Blocking
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
 
-    assert_eq!(
-        false,
-        updater.update_ready().expect("couldn't check for update")
-    );
+        // Next check will be immediate
+        updater.set_interval(0);
 
-    // Next check will be immediate
-    updater.set_interval(0);
+        assert!(updater.update_ready().expect("couldn't check for update"));
+    }
+    {
+        // Non-blocking
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-    assert!(updater.update_ready().expect("couldn't check for update"));
+        // Next check will be immediate
+        updater.set_interval(0);
+
+        // Start async worker
+        updater.init().expect("couldn't init worker");
+        assert!(updater.update_ready().expect("couldn't check for update"));
+    }
 }
 
 #[test]
