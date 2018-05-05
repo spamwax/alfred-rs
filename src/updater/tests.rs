@@ -19,7 +19,7 @@ fn it_tests_settings_filename() {
 }
 
 #[test]
-fn it_ignores_saved_version_after_an_upgrade_1() {
+fn it_ignores_saved_version_after_an_upgrade() {
     // Make sure a freshly upgraded workflow does not use version info from saved state
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
@@ -59,56 +59,56 @@ fn it_ignores_saved_version_after_an_upgrade_1() {
     }
 }
 
-#[test]
-fn it_ignores_saved_version_after_an_upgrade_2() {
-    // Make sure a freshly upgraded workflow does not use version info from saved state
-    setup_workflow_env_vars(true);
-    let _m = setup_mock_server(200);
+// #[test]
+// fn it_ignores_saved_version_after_an_upgrade_async() {
+//     // Make sure a freshly upgraded workflow does not use version info from saved state
+//     setup_workflow_env_vars(true);
+//     let _m = setup_mock_server(200);
 
-    {
-        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-        // First update_ready is always false.
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
-    }
+//     {
+//         let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+//         assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+//         // First update_ready is always false.
+//         assert_eq!(
+//             false,
+//             updater.update_ready().expect("couldn't check for update")
+//         );
+//     }
 
-    {
-        // Next check it reports a new version since mock server has a release for us
-        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        updater.set_interval(0);
-        assert_eq!(
-            true,
-            updater
-                .update_ready_async()
-                .unwrap()
-                .recv()
-                .unwrap()
-                .expect("couldn't check for update")
-        );
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-    }
+//     {
+//         // Next check it reports a new version since mock server has a release for us
+//         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+//         updater.set_interval(0);
+//         assert_eq!(
+//             true,
+//             updater
+//                 .update_ready_async()
+//                 .unwrap()
+//                 .recv()
+//                 .unwrap()
+//                 .expect("couldn't check for update")
+//         );
+//         assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+//     }
 
-    // Mimic the upgrade process by bumping the version
-    StdEnv::set_var("alfred_workflow_version", VERSION_TEST_NEW);
-    {
-        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        // Updater should pick up new version rather than using saved one
-        assert_eq!(VERSION_TEST_NEW, format!("{}", updater.current_version()));
-        // No more updates
-        assert_eq!(
-            false,
-            updater
-                .update_ready_async()
-                .unwrap()
-                .recv()
-                .unwrap()
-                .expect("couldn't check for update")
-        );
-    }
-}
+//     // Mimic the upgrade process by bumping the version
+//     StdEnv::set_var("alfred_workflow_version", VERSION_TEST_NEW);
+//     {
+//         let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+//         // Updater should pick up new version rather than using saved one
+//         assert_eq!(VERSION_TEST_NEW, format!("{}", updater.current_version()));
+//         // No more updates
+//         assert_eq!(
+//             false,
+//             updater
+//                 .update_ready_async()
+//                 .unwrap()
+//                 .recv()
+//                 .unwrap()
+//                 .expect("couldn't check for update")
+//         );
+//     }
+// }
 
 #[test]
 #[should_panic(expected = "ClientError(BadRequest)")]
@@ -197,109 +197,109 @@ fn it_tests_download() {
     assert!(updater.download_latest().is_ok());
 }
 
-#[test]
-fn it_tests_async_updates_1() {
-    // This test will wait for the other thread to finish (rx.recv() blocks)
-    setup_workflow_env_vars(true);
-    let _m = setup_mock_server(200);
+// #[test]
+// fn it_tests_async_updates_1() {
+//     // This test will wait for the other thread to finish (rx.recv() blocks)
+//     setup_workflow_env_vars(true);
+//     let _m = setup_mock_server(200);
 
-    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-    // Next check will be immediate
-    updater.set_interval(0);
+//     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+//     // Next check will be immediate
+//     updater.set_interval(0);
 
-    let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
-    let status = rx.recv();
-    assert!(status.is_ok());
-    assert_eq!(false, status.unwrap().unwrap());
-}
+//     let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
+//     let status = rx.recv();
+//     assert!(status.is_ok());
+//     assert_eq!(false, status.unwrap().unwrap());
+// }
 
-#[test]
-fn it_tests_async_updates_2() {
-    // This test will only spawn a thread once.
-    // Second call will use a cache since it's not due to check.
-    setup_workflow_env_vars(true);
-    let _m = setup_mock_server(200);
+// #[test]
+// fn it_tests_async_updates_2() {
+//     // This test will only spawn a thread once.
+//     // Second call will use a cache since it's not due to check.
+//     setup_workflow_env_vars(true);
+//     let _m = setup_mock_server(200);
 
-    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+//     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-    {
-        // Calling update_ready on first run of workflow will return false since we assume workflow
-        // was just downloaded.
-        let r = updater
-                .update_ready_async()
-                .unwrap_or_else(|e| panic!(e))
-                .recv()
-                .unwrap() // Unwrap recv-ing operation result
-                .unwrap(); // Unwrap contained msg
-        assert_eq!(false, r);
-    }
+//     {
+//         // Calling update_ready on first run of workflow will return false since we assume workflow
+//         // was just downloaded.
+//         let r = updater
+//                 .update_ready_async()
+//                 .unwrap_or_else(|e| panic!(e))
+//                 .recv()
+//                 .unwrap() // Unwrap recv-ing operation result
+//                 .unwrap(); // Unwrap contained msg
+//         assert_eq!(false, r);
+//     }
 
-    {
-        // Next check will spawn a thread. There should be an update avail. from mock server.
-        updater.set_interval(0);
-        let r = updater
-                .update_ready_async()
-                .unwrap_or_else(|e| panic!(e))
-                .recv()
-                .unwrap() // Unwrap recv-ing operation result
-                .unwrap(); // Unwrap contained msg
-        assert_eq!(true, r);
-    }
+//     {
+//         // Next check will spawn a thread. There should be an update avail. from mock server.
+//         updater.set_interval(0);
+//         let r = updater
+//                 .update_ready_async()
+//                 .unwrap_or_else(|e| panic!(e))
+//                 .recv()
+//                 .unwrap() // Unwrap recv-ing operation result
+//                 .unwrap(); // Unwrap contained msg
+//         assert_eq!(true, r);
+//     }
 
-    {
-        // make mock server return error. This way we can test that no network call was made
-        // assuming Updater can read its cache file successfully
-        let _m = setup_mock_server(503);
-        // Increase interval
-        updater.set_interval(86400);
+//     {
+//         // make mock server return error. This way we can test that no network call was made
+//         // assuming Updater can read its cache file successfully
+//         let _m = setup_mock_server(503);
+//         // Increase interval
+//         updater.set_interval(86400);
 
-        let t = updater
-            .update_ready_async()
-            .unwrap_or_else(|e| panic!(e))
-            .recv()
-            .unwrap();
-        assert!(t.is_ok()); // No network call was made, otherwise this would've been error
-        assert_eq!(true, t.unwrap());
-    }
-}
+//         let t = updater
+//             .update_ready_async()
+//             .unwrap_or_else(|e| panic!(e))
+//             .recv()
+//             .unwrap();
+//         assert!(t.is_ok()); // No network call was made, otherwise this would've been error
+//         assert_eq!(true, t.unwrap());
+//     }
+// }
 
-#[test]
-#[should_panic(expected = "ServerError(InternalServerError)")]
-fn it_tests_async_updates_3() {
-    setup_workflow_env_vars(true);
-    let _m = setup_mock_server(200);
+// #[test]
+// #[should_panic(expected = "ServerError(InternalServerError)")]
+// fn it_tests_async_updates_3() {
+//     setup_workflow_env_vars(true);
+//     let _m = setup_mock_server(200);
 
-    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+//     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-    {
-        // Calling update_ready on first run of workflow will return false since we assume workflow
-        // was just downloaded.
-        let r = updater
-            .update_ready_async()
-            .unwrap_or_else(|e| panic!(e))
-            .recv()
-            .unwrap()
-            .unwrap();
-        assert_eq!(false, r);
-    }
+//     {
+//         // Calling update_ready on first run of workflow will return false since we assume workflow
+//         // was just downloaded.
+//         let r = updater
+//             .update_ready_async()
+//             .unwrap_or_else(|e| panic!(e))
+//             .recv()
+//             .unwrap()
+//             .unwrap();
+//         assert_eq!(false, r);
+//     }
 
-    // Next check will spawn a thread.
-    {
-        updater.set_interval(0);
-        // Introduce a server error
-        let _m = setup_mock_server(500);
-        let r = updater.update_ready_async();
+//     // Next check will spawn a thread.
+//     {
+//         updater.set_interval(0);
+//         // Introduce a server error
+//         let _m = setup_mock_server(500);
+//         let r = updater.update_ready_async();
 
-        // Calling and spawning thread should go ok
-        assert!(r.is_ok());
+//         // Calling and spawning thread should go ok
+//         assert!(r.is_ok());
 
-        // However the received msg should contain error since spawned thread
-        // will get a 500 error from server
-        let msg = r.unwrap().recv().unwrap();
-        assert!(msg.is_err());
-        msg.unwrap();
-    }
-}
+//         // However the received msg should contain error since spawned thread
+//         // will get a 500 error from server
+//         let msg = r.unwrap().recv().unwrap();
+//         assert!(msg.is_err());
+//         msg.unwrap();
+//     }
+// }
 
 pub(super) fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
     // Mimic Alfred's environment variables

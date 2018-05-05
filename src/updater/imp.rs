@@ -32,7 +32,9 @@ where
                 .map_or_else(|| Ok(Version::from((0, 0, 0))), |v| Version::parse(&v))?;
             let state = UpdaterState {
                 current_version,
+                avail_version: None,
                 last_check: Cell::new(None),
+                rx: RefCell::new(None),
                 update_interval: UPDATE_INTERVAL,
             };
             let updater = Updater {
@@ -96,7 +98,7 @@ where
 
     pub(super) fn start_releaser_worker(
         &self,
-        tx: mpsc::Sender<Result<bool, Error>>,
+        tx: mpsc::Sender<Result<Option<UpdateInfo>, Error>>,
         p: PathBuf,
     ) -> Result<(), Error> {
         use std::thread;
@@ -105,17 +107,26 @@ where
         let current_version = self.current_version().clone();
 
         thread::Builder::new().spawn(move || {
-            let outcome = releaser
-                .latest_version()
-                .map(|v| (current_version < v, v))
-                .and_then(|(r, v)| {
-                    tx.send(Ok(r))?;
-                    Ok((r, v))
-                })
-                .and_then(|(r, v)| {
-                    Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
-                    Ok(())
-                });
+            let mut talk_to_mother = || -> Result<(), Error> {
+                let (update_avail, v) =
+                    releaser.latest_version().map(|v| (current_version < v, v))?;
+                let payload = if update_avail {
+                    let url = releaser.downloadable_url()?;
+                    let info = UpdateInfo {
+                        avail_version: v,
+                        downloadable_url: url,
+                    };
+                    Some(info)
+                } else {
+                    None
+                };
+                tx.send(Ok(payload.clone()))?;
+                Self::write_last_check_status(&p, payload)?;
+                Ok(())
+            };
+
+            let outcome = talk_to_mother();
+
             if let Err(error) = outcome {
                 print!("worker outcome is error: {:?}", error);
                 tx.send(Err(error))
@@ -128,7 +139,7 @@ where
     // write version of latest avail. release (if any) to a cache file
     pub(super) fn write_last_check_status(
         p: &PathBuf,
-        version: Option<Version>,
+        version: Option<UpdateInfo>,
     ) -> Result<(), Error> {
         File::create(p)
             .and_then(|fp| {
@@ -144,7 +155,7 @@ where
     }
 
     // read version of latest avail. release (if any) from a cache file
-    pub(super) fn read_last_check_status(p: &PathBuf) -> Result<Option<Version>, Error> {
+    pub(super) fn read_last_check_status(p: &PathBuf) -> Result<Option<UpdateInfo>, Error> {
         Ok(File::open(p).and_then(|fp| {
             let buf_reader = BufReader::with_capacity(128, fp);
             let v = serde_json::from_reader(buf_reader)?;
@@ -174,4 +185,6 @@ where
     }
 }
 
-pub(super) fn default_interval() -> i64 { UPDATE_INTERVAL }
+pub(super) fn default_interval() -> i64 {
+    UPDATE_INTERVAL
+}

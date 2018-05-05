@@ -141,12 +141,16 @@ extern crate reqwest;
 #[cfg(feature = "updater")]
 extern crate semver;
 #[cfg(feature = "updater")]
+extern crate serde;
+#[cfg(feature = "updater")]
 #[macro_use]
 extern crate serde_derive;
 #[cfg(feature = "updater")]
 extern crate time;
 #[cfg(feature = "updater")]
 extern crate url;
+#[cfg(feature = "updater")]
+extern crate url_serde;
 
 pub mod env;
 pub mod json;

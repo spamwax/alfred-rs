@@ -144,6 +144,8 @@ use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use time::Duration;
+use url::Url;
+use url_serde;
 
 mod imp;
 mod releaser;
@@ -168,9 +170,19 @@ where
 #[derive(Debug, Serialize, Deserialize)]
 struct UpdaterState {
     current_version: Version,
+    avail_version: Option<UpdateInfo>,
     last_check: Cell<Option<DateTime<Utc>>>,
+    #[serde(skip)]
+    rx: RefCell<Option<Receiver<Result<Option<UpdateInfo>, Error>>>>,
     #[serde(skip, default = "default_interval")]
     update_interval: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct UpdateInfo {
+    avail_version: Version,
+    #[serde(with = "url_serde")]
+    downloadable_url: Url,
 }
 
 impl Updater<GithubReleaser> {
@@ -421,14 +433,24 @@ where
                 .borrow_mut()
                 .latest_version()
                 .map(|v| (*self.current_version() < v, v))
-                .and_then(|(r, v)| {
-                    Self::write_last_check_status(&p, if r { Some(v) } else { None })?;
-                    Ok(r)
+                .and_then(|(update_avail, v)| {
+                    let payload = if update_avail {
+                        let url = self.releaser.borrow().downloadable_url()?;
+                        let info = UpdateInfo {
+                            avail_version: v,
+                            downloadable_url: url,
+                        };
+                        Some(info)
+                    } else {
+                        None
+                    };
+                    Self::write_last_check_status(&p, payload)?;
+                    Ok(update_avail)
                 })
-                .and_then(|r| {
+                .and_then(|update_avail| {
                     self.set_last_check(Utc::now());
                     self.save()?;
-                    Ok(r)
+                    Ok(update_avail)
                 })
         };
 
@@ -444,8 +466,8 @@ where
             Self::read_last_check_status(&p)
                 .map(|last_check_status| {
                     last_check_status
-                        .map(|ref last_saved_version| {
-                            if self.current_version() < last_saved_version {
+                        .map(|last_update_info| {
+                            if self.current_version() < &last_update_info.avail_version {
                                 true
                             } else {
                                 false
@@ -530,7 +552,7 @@ where
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
     /// [`recv()`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.recv
     /// [`try_recv()`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.try_recv
-    pub fn update_ready_async(&self) -> Result<Receiver<Result<bool, Error>>, Error> {
+    pub fn init(&self) -> Result<(), Error> {
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
 
@@ -543,28 +565,47 @@ where
             self.set_last_check(Utc::now());
             self.save()?;
             // This send is always successful
-            tx.send(Ok(false)).unwrap();
+            tx.send(Ok(None)).unwrap();
         } else if self.due_to_check() {
             // it's time to talk to remote server
             self.start_releaser_worker(tx, p)?;
         } else {
-            let status = Self::read_last_check_status(&p)
-                .map(|last_check_status| {
-                    last_check_status
-                        .map(|ref last_saved_version| {
-                            if self.current_version() < last_saved_version {
-                                true
-                            } else {
-                                false
-                            }
-                        })
-                        .unwrap_or(false)
-                })
-                .or(Ok(false));
+            let status = Self::read_last_check_status(&p).map(|last_check_status| {
+                if let Some(last_update_info) = last_check_status {
+                    if self.current_version() < &last_update_info.avail_version {
+                        Some(last_update_info)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
             // This send is always successful
             tx.send(status).unwrap();
         }
-        Ok(rx)
+        *self.state.rx.borrow_mut() = Some(rx);
+        Ok(())
+    }
+
+    pub fn update_ready_(&self) -> Result<bool, Error> {
+        if self.state.rx.borrow().is_none() {
+            panic!("You need to call init() first!");
+        }
+
+        self.state
+            .rx
+            .borrow()
+            .as_ref()
+            .map(|rx| rx.recv()?)
+            .map(|msg| {
+                msg.and_then(|update_info| {
+                    self.set_last_check(Utc::now());
+                    self.save()?;
+                    update_info.map(|_| Ok(true)).unwrap_or(Ok(false))
+                })
+            })
+            .unwrap_or(Ok(false))
     }
 
     /// Check if it is time to ask remote server for latest updates.
