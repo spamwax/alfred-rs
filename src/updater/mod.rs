@@ -429,29 +429,26 @@ where
         // make a network call to see if a newer version is avail.
         // save the result of call to cache file.
         let ask_releaser_for_update = || -> Result<bool, Error> {
-            self.releaser
+            let (update_avail, v) = self.releaser
                 .borrow_mut()
                 .latest_version()
-                .map(|v| (*self.current_version() < v, v))
-                .and_then(|(update_avail, v)| {
-                    let payload = if update_avail {
-                        let url = self.releaser.borrow().downloadable_url()?;
-                        let info = UpdateInfo {
-                            avail_version: v,
-                            downloadable_url: url,
-                        };
-                        Some(info)
-                    } else {
-                        None
-                    };
-                    Self::write_last_check_status(&p, payload)?;
-                    Ok(update_avail)
-                })
-                .and_then(|update_avail| {
-                    self.set_last_check(Utc::now());
-                    self.save()?;
-                    Ok(update_avail)
-                })
+                .map(|v| (*self.current_version() < v, v))?;
+
+            let payload = if update_avail {
+                let url = self.releaser.borrow().downloadable_url()?;
+                let info = UpdateInfo {
+                    avail_version: v,
+                    downloadable_url: url,
+                };
+                Some(info)
+            } else {
+                None
+            };
+            Self::write_last_check_status(&p, payload)?;
+
+            self.set_last_check(Utc::now());
+            self.save()?;
+            Ok(update_avail)
         };
 
         // if first time checking, just update the updater's timestamp, no network call
