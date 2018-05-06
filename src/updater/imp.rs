@@ -308,6 +308,8 @@ where
             let rx_option = mpsc.rx.borrow();
             let rx = rx_option.as_ref().unwrap();
             rr = rx.recv();
+            self.set_last_check(Utc::now());
+            self.save()?;
             if rr.is_ok() {
                 msg = rr.as_ref().unwrap();
             } else {

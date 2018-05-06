@@ -170,6 +170,8 @@ where
     releaser: RefCell<T>,
 }
 
+type ReleasePayloadResult = Result<Option<UpdateInfo>, Error>;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct UpdaterState {
     current_version: Version,
@@ -190,8 +192,8 @@ struct UpdateInfo {
 
 #[derive(Debug)]
 struct MPSCState {
-    recvd_payload: RefCell<Option<Result<Option<UpdateInfo>, Error>>>,
-    rx: RefCell<Option<Receiver<Result<Option<UpdateInfo>, Error>>>>,
+    recvd_payload: RefCell<Option<ReleasePayloadResult>>,
+    rx: RefCell<Option<Receiver<ReleasePayloadResult>>>,
 }
 
 impl Updater<GithubReleaser> {
