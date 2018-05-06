@@ -104,21 +104,17 @@ where
         use std::thread;
 
         let mut releaser = (*self.releaser.borrow()).clone();
-        let current_version = self.current_version().clone();
 
         thread::Builder::new().spawn(move || {
             let mut talk_to_mother = || -> Result<(), Error> {
-                let (update_avail, v) =
-                    releaser.latest_version().map(|v| (current_version < v, v))?;
-                let payload = if update_avail {
+                let v = releaser.latest_version()?;
+                let payload = {
                     let url = releaser.downloadable_url()?;
                     let info = UpdateInfo {
                         avail_version: v,
                         downloadable_url: url,
                     };
                     Some(info)
-                } else {
-                    None
                 };
                 Self::write_last_check_status(&p, &payload)?;
                 tx.send(Ok(payload))?;
@@ -134,41 +130,6 @@ where
             }
         })?;
         Ok(())
-    }
-
-    pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
-        let rx = self.state.rx.borrow();
-        let rr = rx.as_ref().unwrap().recv();
-        if rr.is_ok() {
-            let msg = rr.unwrap();
-            if msg.is_ok() {
-                let update_info = msg.unwrap();
-                *self.state.avail_version.borrow_mut() = update_info;
-            } else {
-                return Err(msg.unwrap_err());
-            }
-        } else {
-            eprintln!("{:?}", rr);
-            return Err(err_msg(format!("{:?}", rr)));
-        }
-        if self.state.avail_version.borrow().is_some() {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-        // self.state
-        //     .rx
-        //     .borrow()
-        //     .as_ref()
-        //     .map(|rx| rx.recv()?)
-        //     .map(|msg| {
-        //         msg.and_then(|update_info| {
-        //             self.set_last_check(Utc::now());
-        //             self.save()?;
-        //             update_info.map(|_| Ok(true)).unwrap_or(Ok(false))
-        //         })
-        //     })
-        //     .unwrap_or(Ok(false))
     }
 
     // write version of latest avail. release (if any) to a cache file
@@ -293,15 +254,13 @@ where
                 .latest_version()
                 .map(|v| (*self.current_version() < v, v))?;
 
-            let payload = if update_avail {
+            let payload = {
                 let url = self.releaser.borrow().downloadable_url()?;
                 let info = UpdateInfo {
                     avail_version: v,
                     downloadable_url: url,
                 };
                 Some(info)
-            } else {
-                None
             };
             Self::write_last_check_status(&p, &payload)?;
             *self.state.avail_version.borrow_mut() = payload;
@@ -334,6 +293,41 @@ where
                 })
                 .or(Ok(false))
         }
+    }
+
+    pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
+        let rx = self.state.rx.borrow();
+        let rr = rx.as_ref().unwrap().recv();
+        if rr.is_ok() {
+            let msg = rr.unwrap();
+            if msg.is_ok() {
+                let update_info = msg.unwrap();
+                *self.state.avail_version.borrow_mut() = update_info;
+            } else {
+                return Err(msg.unwrap_err());
+            }
+        } else {
+            eprintln!("{:?}", rr);
+            return Err(err_msg(format!("{:?}", rr)));
+        }
+        if self.state.avail_version.borrow().is_some() {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+        // self.state
+        //     .rx
+        //     .borrow()
+        //     .as_ref()
+        //     .map(|rx| rx.recv()?)
+        //     .map(|msg| {
+        //         msg.and_then(|update_info| {
+        //             self.set_last_check(Utc::now());
+        //             self.save()?;
+        //             update_info.map(|_| Ok(true)).unwrap_or(Ok(false))
+        //         })
+        //     })
+        //     .unwrap_or(Ok(false))
     }
 }
 

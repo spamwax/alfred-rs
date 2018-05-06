@@ -172,7 +172,6 @@ fn it_get_latest_info_from_releaser() {
     {
         // Non-blocking
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-
         // Next check will be immediate
         updater.set_interval(0);
 
