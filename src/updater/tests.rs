@@ -152,6 +152,49 @@ fn it_handles_server_error_async() {
 }
 
 #[test]
+fn it_caches_workers_payload() {
+    setup_workflow_env_vars(true);
+
+    {
+        let _m = setup_mock_server(200);
+        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+        updater.init().expect("couldn't init worker");
+        // First update_ready is always false.
+        assert_eq!(
+            false,
+            updater.update_ready().expect("couldn't check for update")
+        );
+    }
+    {
+        let _m = setup_mock_server(200);
+        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+        // Next check will be immediate
+        updater.set_interval(0);
+        updater.init().expect("couldn't init worker");
+        assert_eq!(
+            true,
+            updater.update_ready().expect("couldn't check for update"),
+        );
+
+        // Consequenst calls to update_ready should cache the payload.
+        let _m = setup_mock_server(400);
+        assert_eq!(
+            true,
+            updater.update_ready().expect("couldn't check for update"),
+        );
+        assert_eq!(
+            true,
+            updater.update_ready().expect("couldn't check for update"),
+        );
+        assert_eq!(
+            true,
+            updater.update_ready().expect("couldn't check for update"),
+        );
+    }
+}
+
+#[test]
 fn it_get_latest_info_from_releaser() {
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);

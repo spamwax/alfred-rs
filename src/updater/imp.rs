@@ -298,63 +298,63 @@ where
     pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
         let worker_state = self.state.worker_state.borrow();
         let mpsc = worker_state.as_ref().expect("no worker_state");
-        let payload;
-        let rr;
-        let msg;
+        let mut rr;
         if worker_state.is_some() && mpsc.recvd_payload.borrow().is_some() {
+            let payload;
+            let msg;
             payload = mpsc.recvd_payload.borrow();
             msg = payload.as_ref().expect("no recvd_payload");
+            if msg.is_ok() {
+                if self.state.avail_version.borrow().is_some()
+                    && self.current_version()
+                        < &self.state
+                            .avail_version
+                            .borrow()
+                            .as_ref()
+                            .unwrap()
+                            .avail_version
+                {
+                    return Ok(true);
+                } else {
+                    return Ok(false);
+                }
+            } else {
+                return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
+            }
         } else {
+            let msg;
             let rx_option = mpsc.rx.borrow();
             let rx = rx_option.as_ref().unwrap();
             rr = rx.recv();
-            self.set_last_check(Utc::now());
-            self.save()?;
             if rr.is_ok() {
-                msg = rr.as_ref().unwrap();
+                self.set_last_check(Utc::now());
+                self.save()?;
+                msg = rr.as_mut().unwrap();
+                if msg.is_ok() {
+                    let update_info = msg.as_ref().unwrap();
+                    *self.state.avail_version.borrow_mut() = update_info.clone();
+                    *mpsc.recvd_payload.borrow_mut() = Some(Ok(update_info.clone()));
+                } else {
+                    return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
+                }
             } else {
                 eprintln!("{:?}", rr);
                 return Err(err_msg(format!("{:?}", rr)));
             }
+            if self.state.avail_version.borrow().is_some()
+                && self.current_version()
+                    < &self.state
+                        .avail_version
+                        .borrow()
+                        .as_ref()
+                        .unwrap()
+                        .avail_version
+            {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
-        if msg.is_ok() {
-            let update_info = msg.as_ref().unwrap();
-            // assert!(update_info.is_some());
-            *self.state.avail_version.borrow_mut() = update_info.clone();
-            self.state
-                .worker_state
-                .borrow()
-                .as_ref()
-                .map(|mpsc| *mpsc.recvd_payload.borrow_mut() = Some(Ok(update_info.clone())));
-        } else {
-            return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
-        }
-        if self.state.avail_version.borrow().is_some()
-            && self.current_version()
-                < &self.state
-                    .avail_version
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .avail_version
-        {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-        // self.state
-        //     .rx
-        //     .borrow()
-        //     .as_ref()
-        //     .map(|rx| rx.recv()?)
-        //     .map(|msg| {
-        //         msg.and_then(|update_info| {
-        //             self.set_last_check(Utc::now());
-        //             self.save()?;
-        //             update_info.map(|_| Ok(true)).unwrap_or(Ok(false))
-        //         })
-        //     })
-        //     .unwrap_or(Ok(false))
     }
 }
 
