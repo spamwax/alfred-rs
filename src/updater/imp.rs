@@ -297,39 +297,19 @@ where
 
     pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
         let worker_state = self.state.worker_state.borrow();
+        if worker_state.is_none() {
+            panic!("you need to use init first")
+        };
+
         let mpsc = worker_state.as_ref().expect("no worker_state");
-        let mut rr;
-        if worker_state.is_some() && mpsc.recvd_payload.borrow().is_some() {
-            let payload;
-            let msg;
-            payload = mpsc.recvd_payload.borrow();
-            msg = payload.as_ref().expect("no recvd_payload");
-            if msg.is_ok() {
-                if self.state.avail_version.borrow().is_some()
-                    && self.current_version()
-                        < &self.state
-                            .avail_version
-                            .borrow()
-                            .as_ref()
-                            .unwrap()
-                            .avail_version
-                {
-                    return Ok(true);
-                } else {
-                    return Ok(false);
-                }
-            } else {
-                return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
-            }
-        } else {
-            let msg;
+        if mpsc.recvd_payload.borrow().is_none() {
             let rx_option = mpsc.rx.borrow();
             let rx = rx_option.as_ref().unwrap();
-            rr = rx.recv();
+            let rr = rx.recv();
             if rr.is_ok() {
                 self.set_last_check(Utc::now());
                 self.save()?;
-                msg = rr.as_mut().unwrap();
+                let msg = rr.as_ref().unwrap();
                 if msg.is_ok() {
                     let update_info = msg.as_ref().unwrap();
                     *self.state.avail_version.borrow_mut() = update_info.clone();
@@ -341,19 +321,19 @@ where
                 eprintln!("{:?}", rr);
                 return Err(err_msg(format!("{:?}", rr)));
             }
-            if self.state.avail_version.borrow().is_some()
-                && self.current_version()
-                    < &self.state
-                        .avail_version
-                        .borrow()
-                        .as_ref()
-                        .unwrap()
-                        .avail_version
-            {
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+        }
+        if self.state.avail_version.borrow().is_some()
+            && self.current_version()
+                < &self.state
+                    .avail_version
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .avail_version
+        {
+            return Ok(true);
+        } else {
+            return Ok(false);
         }
     }
 }
