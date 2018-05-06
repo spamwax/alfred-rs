@@ -176,7 +176,7 @@ struct UpdaterState {
     avail_version: RefCell<Option<UpdateInfo>>,
     last_check: Cell<Option<DateTime<Utc>>>,
     #[serde(skip)]
-    rx: RefCell<Option<Receiver<Result<Option<UpdateInfo>, Error>>>>,
+    worker_state: RefCell<Option<MPSCState>>,
     #[serde(skip, default = "default_interval")]
     update_interval: i64,
 }
@@ -186,6 +186,12 @@ struct UpdateInfo {
     avail_version: Version,
     #[serde(with = "url_serde")]
     downloadable_url: Url,
+}
+
+#[derive(Debug)]
+struct MPSCState {
+    recvd_payload: RefCell<Option<Result<Option<UpdateInfo>, Error>>>,
+    rx: RefCell<Option<Receiver<Result<Option<UpdateInfo>, Error>>>>,
 }
 
 impl Updater<GithubReleaser> {
@@ -468,12 +474,15 @@ where
                 .or(Ok(None));
             tx.send(status).unwrap();
         }
-        *self.state.rx.borrow_mut() = Some(rx);
+        *self.state.worker_state.borrow_mut() = Some(MPSCState {
+            recvd_payload: RefCell::new(None),
+            rx: RefCell::new(Some(rx)),
+        });
         Ok(())
     }
 
     pub fn update_ready(&self) -> Result<bool, Error> {
-        if self.state.rx.borrow().is_none() {
+        if self.state.worker_state.borrow().is_none() {
             self.update_ready_sync()
         } else {
             self.update_ready_async_()

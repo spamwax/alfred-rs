@@ -34,7 +34,7 @@ where
                 current_version,
                 avail_version: RefCell::new(None),
                 last_check: Cell::new(None),
-                rx: RefCell::new(None),
+                worker_state: RefCell::new(None),
                 update_interval: UPDATE_INTERVAL,
             };
             let updater = Updater {
@@ -296,21 +296,46 @@ where
     }
 
     pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
-        let rx = self.state.rx.borrow();
-        let rr = rx.as_ref().unwrap().recv();
-        if rr.is_ok() {
-            let msg = rr.unwrap();
-            if msg.is_ok() {
-                let update_info = msg.unwrap();
-                *self.state.avail_version.borrow_mut() = update_info;
-            } else {
-                return Err(msg.unwrap_err());
-            }
+        let worker_state = self.state.worker_state.borrow();
+        let mpsc = worker_state.as_ref().expect("no worker_state");
+        let payload;
+        let rr;
+        let msg;
+        if worker_state.is_some() && mpsc.recvd_payload.borrow().is_some() {
+            payload = mpsc.recvd_payload.borrow();
+            msg = payload.as_ref().expect("no recvd_payload");
         } else {
-            eprintln!("{:?}", rr);
-            return Err(err_msg(format!("{:?}", rr)));
+            let rx_option = mpsc.rx.borrow();
+            let rx = rx_option.as_ref().unwrap();
+            rr = rx.recv();
+            if rr.is_ok() {
+                msg = rr.as_ref().unwrap();
+            } else {
+                eprintln!("{:?}", rr);
+                return Err(err_msg(format!("{:?}", rr)));
+            }
         }
-        if self.state.avail_version.borrow().is_some() {
+        if msg.is_ok() {
+            let update_info = msg.as_ref().unwrap();
+            // assert!(update_info.is_some());
+            *self.state.avail_version.borrow_mut() = update_info.clone();
+            self.state
+                .worker_state
+                .borrow()
+                .as_ref()
+                .map(|mpsc| *mpsc.recvd_payload.borrow_mut() = Some(Ok(update_info.clone())));
+        } else {
+            return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
+        }
+        if self.state.avail_version.borrow().is_some()
+            && self.current_version()
+                < &self.state
+                    .avail_version
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .avail_version
+        {
             Ok(true)
         } else {
             Ok(false)
