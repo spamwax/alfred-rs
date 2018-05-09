@@ -156,7 +156,7 @@ mod tests;
 pub use self::releaser::GithubReleaser;
 pub use self::releaser::Releaser;
 
-use self::imp::default_interval;
+// use self::imp::default_interval;
 
 // TODO: Update Releaser trait so we don't need two methods (lastest_version and downloadable_url)
 //     Only one method (latest_release?) should return both version and a download url.
@@ -169,41 +169,8 @@ pub struct Updater<T>
 where
     T: Releaser,
 {
-    state: UpdaterState,
+    state: imp::UpdaterState,
     releaser: RefCell<T>,
-}
-
-// Payload that the worker thread will send back
-type ReleasePayloadResult = Result<Option<UpdateInfo>, Error>;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct UpdaterState {
-    current_version: Version,
-    avail_release: RefCell<Option<UpdateInfo>>,
-    last_check: Cell<Option<DateTime<Utc>>>,
-
-    #[serde(skip, default = "default_interval")]
-    update_interval: i64,
-    #[serde(skip)]
-    worker_state: RefCell<Option<MPSCState>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct UpdateInfo {
-    // Latest version available from github or releaser
-    version: Version,
-
-    // Like to use to download the above version
-    #[serde(with = "url_serde")]
-    downloadable_url: Url,
-}
-
-#[derive(Debug)]
-struct MPSCState {
-    // First successful call on rx.recv() will cache the results into this field
-    recvd_payload: RefCell<Option<ReleasePayloadResult>>,
-    // Receiver end of communication channel with worker thread
-    rx: RefCell<Option<Receiver<ReleasePayloadResult>>>,
 }
 
 impl Updater<GithubReleaser> {
@@ -414,7 +381,7 @@ where
             let status = Self::read_last_check_status(&p)
                 .map(|last_check| {
                     last_check.and_then(|info| {
-                        if self.current_version() < &info.version {
+                        if self.current_version() < info.version() {
                             Some(info)
                         } else {
                             None
@@ -424,10 +391,7 @@ where
                 .or(Ok(None));
             tx.send(status).unwrap();
         }
-        *self.state.worker_state.borrow_mut() = Some(MPSCState {
-            recvd_payload: RefCell::new(None),
-            rx: RefCell::new(Some(rx)),
-        });
+        *self.state.borrow_mut() = Some(imp::MPSCState::new(rx));
         Ok(())
     }
 
@@ -487,7 +451,7 @@ where
     /// [`init()`]: struct.Updater.html#method.init
     /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     pub fn update_ready(&self) -> Result<bool, Error> {
-        if self.state.worker_state.borrow().is_none() {
+        if self.state.borrow().is_none() {
             self.update_ready_sync()
         } else {
             self.update_ready_async(false)
@@ -553,7 +517,7 @@ where
     /// [`init()`]: struct.Updater.html#method.init
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
     pub fn try_update_ready(&self) -> Result<bool, Error> {
-        if self.state.worker_state.borrow().is_none() {
+        if self.state.borrow().is_none() {
             self.update_ready_sync()
         } else {
             self.update_ready_async(true)
@@ -597,8 +561,10 @@ where
     /// # Panics
     /// The method will panic if the passed value `version` cannot be parsed as a semantic version compatible string.
     pub fn set_version<S: AsRef<str>>(&mut self, version: S) {
-        self.state.current_version = Version::parse(version.as_ref())
+        let v = Version::parse(version.as_ref())
             .expect("version should follow semantic version rules.");
+        self.state.set_version(v);
+
         StdEnv::set_var("alfred_workflow_version", version.as_ref());
     }
 

@@ -1,4 +1,6 @@
 use super::*;
+use std::cell::Ref;
+use std::cell::RefMut;
 use std::sync::mpsc;
 use Updater;
 
@@ -7,6 +9,68 @@ const UPDATE_INTERVAL: i64 = 24 * 60 * 60;
 
 pub(super) const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status.json";
 pub(super) const LATEST_UPDATE_INFO_CACHE_FN_ASYNC: &str = "last_check_status_async.json";
+
+// Payload that the worker thread will send back
+type ReleasePayloadResult = Result<Option<UpdateInfo>, Error>;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct UpdaterState {
+    current_version: Version,
+    avail_release: RefCell<Option<UpdateInfo>>,
+    last_check: Cell<Option<DateTime<Utc>>>,
+
+    #[serde(skip, default = "default_interval")]
+    update_interval: i64,
+    #[serde(skip)]
+    worker_state: RefCell<Option<MPSCState>>,
+}
+
+impl UpdaterState {
+    pub(super) fn set_version(&mut self, v: Version) {
+        self.current_version = v;
+    }
+
+    pub(super) fn borrow<'a>(&'a self) -> Ref<'a, Option<MPSCState>> {
+        self.worker_state.borrow()
+    }
+
+    pub(super) fn borrow_mut<'a>(&'a self) -> RefMut<'a, Option<MPSCState>> {
+        self.worker_state.borrow_mut()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(super) struct UpdateInfo {
+    // Latest version available from github or releaser
+    version: Version,
+
+    // Like to use to download the above version
+    #[serde(with = "url_serde")]
+    downloadable_url: Url,
+}
+
+impl UpdateInfo {
+    pub(super) fn version(&self) -> &Version {
+        &self.version
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct MPSCState {
+    // First successful call on rx.recv() will cache the results into this field
+    recvd_payload: RefCell<Option<ReleasePayloadResult>>,
+    // Receiver end of communication channel with worker thread
+    rx: RefCell<Option<Receiver<ReleasePayloadResult>>>,
+}
+
+impl MPSCState {
+    pub(super) fn new(rx: mpsc::Receiver<ReleasePayloadResult>) -> Self {
+        MPSCState {
+            recvd_payload: RefCell::new(None),
+            rx: RefCell::new(Some(rx)),
+        }
+    }
+}
 
 impl<T> Updater<T>
 where
