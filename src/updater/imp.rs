@@ -32,7 +32,7 @@ where
                 .map_or_else(|| Ok(Version::from((0, 0, 0))), |v| Version::parse(&v))?;
             let state = UpdaterState {
                 current_version,
-                avail_version: RefCell::new(None),
+                avail_release: RefCell::new(None),
                 last_check: Cell::new(None),
                 worker_state: RefCell::new(None),
                 update_interval: UPDATE_INTERVAL,
@@ -111,7 +111,7 @@ where
                 let payload = {
                     let url = releaser.downloadable_url()?;
                     let info = UpdateInfo {
-                        avail_version: v,
+                        version: v,
                         downloadable_url: url,
                     };
                     Some(info)
@@ -257,13 +257,13 @@ where
             let payload = {
                 let url = self.releaser.borrow().downloadable_url()?;
                 let info = UpdateInfo {
-                    avail_version: v,
+                    version: v,
                     downloadable_url: url,
                 };
                 Some(info)
             };
             Self::write_last_check_status(&p, &payload)?;
-            *self.state.avail_version.borrow_mut() = payload;
+            *self.state.avail_release.borrow_mut() = payload;
 
             self.set_last_check(Utc::now());
             self.save()?;
@@ -283,7 +283,7 @@ where
                 .map(|last_check_status| {
                     last_check_status
                         .map(|last_update_info| {
-                            if self.current_version() < &last_update_info.avail_version {
+                            if self.current_version() < &last_update_info.version {
                                 true
                             } else {
                                 false
@@ -319,7 +319,7 @@ where
                             rr.and_then(|msg| {
                                 let msg_status = msg.map(|update_info| {
                                     // received good messag, update cache for received payload
-                                    *self.state.avail_version.borrow_mut() = update_info.clone();
+                                    *self.state.avail_release.borrow_mut() = update_info.clone();
                                     *mpsc.recvd_payload.borrow_mut() =
                                         Some(Ok(update_info.clone()));
                                 });
@@ -333,11 +333,11 @@ where
                 Ok(())
             })?;
         Ok(self.state
-            .avail_version
+            .avail_release
             .borrow()
             .as_ref()
             .map(|release| {
-                if self.current_version() < &release.avail_version {
+                if self.current_version() < &release.version {
                     true
                 } else {
                     false
@@ -347,7 +347,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub(super) fn update_ready_async__(&self) -> Result<bool, Error> {
+    pub(super) fn _update_ready_async(&self) -> Result<bool, Error> {
         let worker_state = self.state.worker_state.borrow();
         if worker_state.is_none() {
             panic!("you need to use init first")
@@ -362,7 +362,7 @@ where
                 let msg = rr.as_ref().unwrap();
                 if msg.is_ok() {
                     let update_info = msg.as_ref().unwrap();
-                    *self.state.avail_version.borrow_mut() = update_info.clone();
+                    *self.state.avail_release.borrow_mut() = update_info.clone();
                     *mpsc.recvd_payload.borrow_mut() = Some(Ok(update_info.clone()));
                 } else {
                     return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
@@ -374,14 +374,8 @@ where
                 return Err(err_msg(format!("{:?}", rr)));
             }
         }
-        if self.state.avail_version.borrow().is_some()
-            && self.current_version()
-                < &self.state
-                    .avail_version
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .avail_version
+        if self.state.avail_release.borrow().is_some()
+            && self.current_version() < &self.state.avail_release.borrow().as_ref().unwrap().version
         {
             return Ok(true);
         } else {

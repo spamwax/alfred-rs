@@ -180,7 +180,7 @@ type ReleasePayloadResult = Result<Option<UpdateInfo>, Error>;
 struct UpdaterState {
     current_version: Version,
     // TODO: rename to avail_release
-    avail_version: RefCell<Option<UpdateInfo>>,
+    avail_release: RefCell<Option<UpdateInfo>>,
     last_check: Cell<Option<DateTime<Utc>>>,
     #[serde(skip)]
     worker_state: RefCell<Option<MPSCState>>,
@@ -190,7 +190,7 @@ struct UpdaterState {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct UpdateInfo {
-    avail_version: Version,
+    version: Version,
     #[serde(with = "url_serde")]
     downloadable_url: Url,
 }
@@ -470,7 +470,7 @@ where
             let status = Self::read_last_check_status(&p)
                 .map(|last_check| {
                     last_check.and_then(|info| {
-                        if self.current_version() < &info.avail_version {
+                        if self.current_version() < &info.version {
                             Some(info)
                         } else {
                             None
