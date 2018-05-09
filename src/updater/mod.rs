@@ -177,6 +177,7 @@ type ReleasePayloadResult = Result<Option<UpdateInfo>, Error>;
 #[derive(Debug, Serialize, Deserialize)]
 struct UpdaterState {
     current_version: Version,
+    // TODO: rename to avail_release
     avail_version: RefCell<Option<UpdateInfo>>,
     last_check: Cell<Option<DateTime<Utc>>>,
     #[serde(skip)]

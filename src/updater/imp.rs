@@ -295,25 +295,29 @@ where
         }
     }
 
-    #[allow(dead_code)]
-    fn foo(&self) -> Result<bool, Error> {
+    pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
         self.state
             .worker_state
             .borrow()
             .as_ref()
             .ok_or(err_msg("you need to use init() metheod first."))
-            .and_then(|mpsc| match *mpsc.recvd_payload.borrow() {
-                Some(_) => Ok(()),
-                None => {
+            .and_then(|mpsc| {
+                if mpsc.recvd_payload.borrow().is_none() {
+                    // No payload received yet, try to talk to worker thread
                     mpsc.rx
                         .borrow()
                         .as_ref()
                         .ok_or(err_msg("you need to use init() correctly!"))
                         .and_then(|rx| {
+                            // block while waiting to receive
                             rx.recv()
                                 .map_err(|e| err_msg(format!("{}", e)))
                                 .and_then(|msg| {
+                                    // received _a_ message, update check time
+                                    self.set_last_check(Utc::now());
+                                    self.save()?;
                                     msg.map(|update_info| {
+                                        // received good messag update cache for received payload
                                         *self.state.avail_version.borrow_mut() =
                                             update_info.clone();
                                         *mpsc.recvd_payload.borrow_mut() =
@@ -322,13 +326,25 @@ where
                                     Ok(())
                                 })
                         })?;
-                    Ok(())
                 }
+                Ok(())
             })?;
-        Ok(true)
+        Ok(self.state
+            .avail_version
+            .borrow()
+            .as_ref()
+            .map(|release| {
+                if self.current_version() < &release.avail_version {
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false))
     }
 
-    pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
+    #[allow(dead_code)]
+    pub(super) fn update_ready_async__(&self) -> Result<bool, Error> {
         let worker_state = self.state.worker_state.borrow();
         if worker_state.is_none() {
             panic!("you need to use init first")
