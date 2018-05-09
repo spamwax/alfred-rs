@@ -4,9 +4,6 @@ use std::cell::RefMut;
 use std::sync::mpsc;
 use Updater;
 
-/// Default update interval duration 24 hr
-const UPDATE_INTERVAL: i64 = 24 * 60 * 60;
-
 pub(super) const LATEST_UPDATE_INFO_CACHE_FN: &str = "last_check_status.json";
 pub(super) const LATEST_UPDATE_INFO_CACHE_FN_ASYNC: &str = "last_check_status_async.json";
 

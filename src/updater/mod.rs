@@ -65,8 +65,6 @@
 //! # extern crate alfred;
 //! # extern crate failure;
 //! use alfred::{Item, ItemBuilder, Updater, json};
-//! use std::thread;
-//! use std::time::Duration;
 //!
 //! # use std::io;
 //! # use failure::Error;
@@ -74,52 +72,41 @@
 //! #     Vec::new()
 //! # }
 //! # fn do_some_other_stuff() {}
+//! // Our workflow's main 'runner' function
 //! fn run<'a>() -> Result<Vec<Item<'a>>, Error> {
-//!     let updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
+//!     let updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
 //!
-//!     // If it has been more than UPDATE_INTERVAL since we last checked,
-//!     // the method will spawn a worker thread to check for updates.
-//!     // Otherwise it will use a cache and immediately send results to `rx`
-//!     let rx = updater
-//!         .update_ready_async()
-//!         .expect("Error in building & spawning worker");
+//!     // Start the process for getting latest release info
+//!     updater.init().expect("cannot initialize updater");
 //!
-//!     // We'll do some other work that's related to our workflow while waiting:
+//!     // We'll do some other work that's related to our workflow:
 //!     do_some_other_stuff();
 //!     let mut items: Vec<Item> = produce_items_for_user_to_see();
 //!
-//!     let mut communication;
-//!     // 1: We can check if worker thread is done without blocking
-//!     {
-//!         communication = rx.try_recv();
-//!     }
-//!     // Or:
-//!     // 2: Optionally wait for 1 second and then check without blocking
-//!     {
-//!         let one_second = Duration::from_millis(1000);
-//!         thread::sleep(one_second);
-//!         communication = rx.try_recv();
-//!     }
+//!     // We can now check if update is ready using two methods:
+//!     // 1- Block and wait until we receives results from worker thread
+//!     let update_status = updater.update_ready();
 //!
-//!     match communication {
-//!         Ok(msg) => {
-//!             // Communication with worker thread was successful
-//!             if let Ok(is_ready) = msg {
-//!                 // Worker thread successfully fetched us release info. from github
-//!                 if is_ready {
-//!                     let update_item = ItemBuilder::new(
-//!                         "New version is available!"
-//!                     ).into_item();
-//!                     items.push(update_item);
-//!                 }
-//!             }
+//!     // 2- Or without blocking, check if the worker thread sent the results.
+//!     //    If the worker thread is still busy, we'll get an `Err`
+//!     let update_status = updater.try_update_ready();
+//!
+//!     if let Ok(is_ready) = update_status { // Comm. with worker was successful
+//!         // Check for new update and add an item to 'items'
+//!         if is_ready {
+//!             let update_item = ItemBuilder::new(
+//!                 "New version is available!"
+//!             ).into_item();
+//!             items.push(update_item);
 //!         }
-//!         Err(_) => { /* worker thread wasn't successful */ }
+//!     } else {
+//!         /* worker thread wasn't successful */
 //!     }
 //!     Ok(items)
 //! }
 //!
 //! fn main() {
+//!     // Fetch the items and show them.
 //!     if let Ok(ref items) = run() {
 //!         json::write_items(io::stdout(), items);
 //!     }
@@ -153,16 +140,14 @@ mod releaser;
 #[cfg(test)]
 mod tests;
 
+/// Default update interval duration (24 hrs)
+pub const UPDATE_INTERVAL: i64 = 24 * 60 * 60;
+
 pub use self::releaser::GithubReleaser;
 pub use self::releaser::Releaser;
 
-// use self::imp::default_interval;
-
 // TODO: Update Releaser trait so we don't need two methods (lastest_version and downloadable_url)
 //     Only one method (latest_release?) should return both version and a download url.
-// TODO: Wrap update_interval & current_version in RefCell so we API doesn't require mut Updater.
-//     We should then add current_version() and current_interval() methods.
-// TODO: Make sure documentation is ok for each method.
 
 /// Struct to check for & download the latest release of workflow from a remote server.
 pub struct Updater<T>
@@ -333,16 +318,14 @@ where
     /// let update_status = updater.try_update_ready();
     ///
     /// if let Ok(is_ready) = update_status {
-    ///         // Everything went ok:
-    ///         // No error happened during operation of worker thread
-    ///         // and we received release info
-    ///         if is_ready {
-    ///             // there is an update available.
-    ///         }
-    ///     } else {
-    ///         /* either the worker thread wasn't successful or we couldn't get its results */
+    ///     // Everything went ok:
+    ///     // No error happened during operation of worker thread
+    ///     // and we received release info
+    ///     if is_ready {
+    ///         // there is an update available.
     ///     }
-    ///
+    /// } else {
+    ///     /* either the worker thread wasn't successful or we couldn't get its results */
     /// }
     /// # Ok(())
     /// # }
