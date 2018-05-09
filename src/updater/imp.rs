@@ -295,7 +295,7 @@ where
         }
     }
 
-    pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
+    pub(super) fn update_ready_async_(&self, try_flag: bool) -> Result<bool, Error> {
         self.state
             .worker_state
             .borrow()
@@ -309,22 +309,25 @@ where
                         .as_ref()
                         .ok_or(err_msg("you need to use init() correctly!"))
                         .and_then(|rx| {
-                            // block while waiting to receive
-                            rx.recv()
-                                .map_err(|e| err_msg(format!("{}", e)))
-                                .and_then(|msg| {
-                                    // received _a_ message, update check time
-                                    self.set_last_check(Utc::now());
-                                    self.save()?;
-                                    msg.map(|update_info| {
-                                        // received good messag update cache for received payload
-                                        *self.state.avail_version.borrow_mut() =
-                                            update_info.clone();
-                                        *mpsc.recvd_payload.borrow_mut() =
-                                            Some(Ok(update_info.clone()));
-                                    })?;
-                                    Ok(())
-                                })
+                            let rr = if try_flag {
+                                // don't block while trying to receive
+                                rx.try_recv().map_err(|e| err_msg(format!("{}", e)))
+                            } else {
+                                // block while waiting to receive
+                                rx.recv().map_err(|e| err_msg(format!("{}", e)))
+                            };
+                            rr.and_then(|msg| {
+                                // received _a_ message, update check time
+                                self.set_last_check(Utc::now());
+                                self.save()?;
+                                msg.map(|update_info| {
+                                    // received good messag update cache for received payload
+                                    *self.state.avail_version.borrow_mut() = update_info.clone();
+                                    *mpsc.recvd_payload.borrow_mut() =
+                                        Some(Ok(update_info.clone()));
+                                })?;
+                                Ok(())
+                            })
                         })?;
                 }
                 Ok(())

@@ -162,6 +162,8 @@ use self::imp::default_interval;
 //     Only one method (latest_release?) should return both version and a download url.
 // TODO: Wrap update_interval & current_version in RefCell so we API doesn't require mut Updater.
 //     We should then add current_version() and current_interval() methods.
+// TODO: Add blocking and non-blocking update_ready_async versions.
+// TODO: Make sure documentation is ok for each method.
 
 /// Struct to check for & download the latest release of workflow from a remote server.
 pub struct Updater<T>
@@ -489,7 +491,15 @@ where
         if self.state.worker_state.borrow().is_none() {
             self.update_ready_sync()
         } else {
-            self.update_ready_async_()
+            self.update_ready_async_(false)
+        }
+    }
+
+    pub fn try_update_ready(&self) -> Result<bool, Error> {
+        if self.state.worker_state.borrow().is_none() {
+            self.update_ready_sync()
+        } else {
+            self.update_ready_async_(true)
         }
     }
 
