@@ -464,7 +464,6 @@ where
             // it's time to talk to remote server
             self.start_releaser_worker(tx, p)?;
         } else {
-            // let last_check = Self::read_last_check_status(&p).unwrap_or(None);
             let status = Self::read_last_check_status(&p)
                 .map(|last_check| {
                     last_check.and_then(|info| {

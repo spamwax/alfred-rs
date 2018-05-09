@@ -295,6 +295,39 @@ where
         }
     }
 
+    #[allow(dead_code)]
+    fn foo(&self) -> Result<bool, Error> {
+        self.state
+            .worker_state
+            .borrow()
+            .as_ref()
+            .ok_or(err_msg("you need to use init() metheod first."))
+            .and_then(|mpsc| match *mpsc.recvd_payload.borrow() {
+                Some(_) => Ok(()),
+                None => {
+                    mpsc.rx
+                        .borrow()
+                        .as_ref()
+                        .ok_or(err_msg("you need to use init() correctly!"))
+                        .and_then(|rx| {
+                            rx.recv()
+                                .map_err(|e| err_msg(format!("{}", e)))
+                                .and_then(|msg| {
+                                    msg.map(|update_info| {
+                                        *self.state.avail_version.borrow_mut() =
+                                            update_info.clone();
+                                        *mpsc.recvd_payload.borrow_mut() =
+                                            Some(Ok(update_info.clone()));
+                                    })?;
+                                    Ok(())
+                                })
+                        })?;
+                    Ok(())
+                }
+            })?;
+        Ok(true)
+    }
+
     pub(super) fn update_ready_async_(&self) -> Result<bool, Error> {
         let worker_state = self.state.worker_state.borrow();
         if worker_state.is_none() {
