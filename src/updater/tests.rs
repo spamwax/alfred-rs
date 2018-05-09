@@ -23,16 +23,7 @@ fn it_ignores_saved_version_after_an_upgrade() {
     // Make sure a freshly upgraded workflow does not use version info from saved state
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
-
-    {
-        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-        // First update_ready is always false.
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
-    }
+    first_check_after_installing_workflow(false);
 
     {
         // Next check it reports a new version since mock server has a release for us
@@ -64,16 +55,7 @@ fn it_ignores_saved_version_after_an_upgrade_async() {
     // Make sure a freshly upgraded workflow does not use version info from saved state
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
-
-    {
-        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-        // First update_ready is always false.
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
-    }
+    first_check_after_installing_workflow(true);
 
     {
         // Next check it reports a new version since mock server has a release for us
@@ -106,16 +88,11 @@ fn it_ignores_saved_version_after_an_upgrade_async() {
 #[test]
 #[should_panic(expected = "ClientError(BadRequest)")]
 fn it_handles_server_error() {
-    setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
+    setup_workflow_env_vars(true);
+    first_check_after_installing_workflow(false);
 
     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-    // First update_ready is always false.
-    assert_eq!(
-        false,
-        updater.update_ready().expect("couldn't check for update")
-    );
-
     // Next check will be immediate
     updater.set_interval(0);
     let _m = setup_mock_server(400);
@@ -127,70 +104,53 @@ fn it_handles_server_error() {
 #[should_panic(expected = "ClientError(BadRequest)")]
 fn it_handles_server_error_async() {
     setup_workflow_env_vars(true);
+    first_check_after_installing_workflow(true);
 
-    {
-        let _m = setup_mock_server(200);
-        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-        updater.init().expect("couldn't init worker");
-        // First update_ready is always false.
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
-    }
-
-    {
-        let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        // Next check will be immediate
-        updater.set_interval(0);
-        updater.init().expect("couldn't init worker");
-        let _m = setup_mock_server(400);
-        // This should panic with a BadRequest (400) error.
-        updater.update_ready().unwrap();
-    }
+    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    // Next check will be immediate
+    updater.set_interval(0);
+    updater.init().expect("couldn't init worker");
+    let _m = setup_mock_server(400);
+    // This should panic with a BadRequest (400) error.
+    updater.update_ready().unwrap();
 }
 
 #[test]
-fn it_caches_workers_payload() {
+fn it_caches_async_workers_payload() {
     setup_workflow_env_vars(true);
 
+    first_check_after_installing_workflow(true);
+    let _m = setup_mock_server(200);
+    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    // Next check will be immediate
+    updater.set_interval(0);
+    updater.init().expect("couldn't init worker");
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update"),
+    );
+
+    // Consequenst calls to update_ready should cache the payload.
+    let _m = setup_mock_server(400);
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update"),
+    );
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update"),
+    );
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update"),
+    );
+
     {
-        let _m = setup_mock_server(200);
-        let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
-        updater.init().expect("couldn't init worker");
-        // First update_ready is always false.
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
-    }
-    {
-        let _m = setup_mock_server(200);
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
         // Next check will be immediate
         updater.set_interval(0);
         updater.init().expect("couldn't init worker");
-        assert_eq!(
-            true,
-            updater.update_ready().expect("couldn't check for update"),
-        );
-
-        // Consequenst calls to update_ready should cache the payload.
-        let _m = setup_mock_server(400);
-        assert_eq!(
-            true,
-            updater.update_ready().expect("couldn't check for update"),
-        );
-        assert_eq!(
-            true,
-            updater.update_ready().expect("couldn't check for update"),
-        );
-        assert_eq!(
-            true,
-            updater.update_ready().expect("couldn't check for update"),
-        );
+        assert_eq!(true, updater.update_ready().is_err());
     }
 }
 
@@ -200,13 +160,9 @@ fn it_get_latest_info_from_releaser() {
     let _m = setup_mock_server(200);
 
     {
+        first_check_after_installing_workflow(false);
         // Blocking
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-        assert_eq!(
-            false,
-            updater.update_ready().expect("couldn't check for update")
-        );
-
         // Next check will be immediate
         updater.set_interval(0);
 
@@ -217,9 +173,9 @@ fn it_get_latest_info_from_releaser() {
         let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
         // Next check will be immediate
         updater.set_interval(0);
-
         // Start async worker
         updater.init().expect("couldn't init worker");
+
         assert!(updater.update_ready().expect("couldn't check for update"));
     }
 }
@@ -230,12 +186,9 @@ fn it_does_one_network_call_per_interval() {
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
 
+    first_check_after_installing_workflow(false);
+
     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-
-    // Calling update_ready on first run of workflow will return false since we assume workflow
-    // was just downloaded.
-    assert!(!updater.update_ready().expect("couldn't check for update"));
-
     // Next check will be immediate
     updater.set_interval(0);
 
@@ -259,12 +212,9 @@ fn it_does_one_network_call_per_interval() {
 fn it_tests_download() {
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);
+    first_check_after_installing_workflow(false);
 
     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-    assert_eq!(
-        false,
-        updater.update_ready().expect("couldn't check for update")
-    );
 
     // Next check will be immediate
     updater.set_interval(0);
@@ -274,109 +224,49 @@ fn it_tests_download() {
     assert!(updater.download_latest().is_ok());
 }
 
-// #[test]
-// fn it_tests_async_updates_1() {
-//     // This test will wait for the other thread to finish (rx.recv() blocks)
-//     setup_workflow_env_vars(true);
-//     let _m = setup_mock_server(200);
+#[test]
+fn it_tests_async_updates_1() {
+    //
+    setup_workflow_env_vars(true);
+    let _m = setup_mock_server(200);
+    first_check_after_installing_workflow(true);
 
-//     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-//     // Next check will be immediate
-//     updater.set_interval(0);
+    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    // Next check will be immediate
+    updater.set_interval(0);
+    updater.init().expect("couldn't init worker");
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update")
+    );
+}
 
-//     let rx = updater.update_ready_async().unwrap_or_else(|e| panic!(e));
-//     let status = rx.recv();
-//     assert!(status.is_ok());
-//     assert_eq!(false, status.unwrap().unwrap());
-// }
+#[test]
+fn it_tests_async_updates_2() {
+    // This test will only spawn a thread once.
+    // Second call will use a cache since it's not due to check.
+    setup_workflow_env_vars(true);
+    let _m = setup_mock_server(200);
+    first_check_after_installing_workflow(true);
 
-// #[test]
-// fn it_tests_async_updates_2() {
-//     // This test will only spawn a thread once.
-//     // Second call will use a cache since it's not due to check.
-//     setup_workflow_env_vars(true);
-//     let _m = setup_mock_server(200);
+    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
 
-//     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    // Next check will spawn a thread. There should be an update avail. from mock server.
+    updater.set_interval(0);
+    updater.init().expect("couldn't init worker");
+    updater.update_ready().expect("chouldn't check for update");
 
-//     {
-//         // Calling update_ready on first run of workflow will return false since we assume workflow
-//         // was just downloaded.
-//         let r = updater
-//                 .update_ready_async()
-//                 .unwrap_or_else(|e| panic!(e))
-//                 .recv()
-//                 .unwrap() // Unwrap recv-ing operation result
-//                 .unwrap(); // Unwrap contained msg
-//         assert_eq!(false, r);
-//     }
+    // make mock server return error. This way we can test that no network call was made
+    // assuming Updater can read its cache file successfully
+    let _m = setup_mock_server(503);
+    // Increase interval
+    updater.set_interval(86400);
 
-//     {
-//         // Next check will spawn a thread. There should be an update avail. from mock server.
-//         updater.set_interval(0);
-//         let r = updater
-//                 .update_ready_async()
-//                 .unwrap_or_else(|e| panic!(e))
-//                 .recv()
-//                 .unwrap() // Unwrap recv-ing operation result
-//                 .unwrap(); // Unwrap contained msg
-//         assert_eq!(true, r);
-//     }
-
-//     {
-//         // make mock server return error. This way we can test that no network call was made
-//         // assuming Updater can read its cache file successfully
-//         let _m = setup_mock_server(503);
-//         // Increase interval
-//         updater.set_interval(86400);
-
-//         let t = updater
-//             .update_ready_async()
-//             .unwrap_or_else(|e| panic!(e))
-//             .recv()
-//             .unwrap();
-//         assert!(t.is_ok()); // No network call was made, otherwise this would've been error
-//         assert_eq!(true, t.unwrap());
-//     }
-// }
-
-// #[test]
-// #[should_panic(expected = "ServerError(InternalServerError)")]
-// fn it_tests_async_updates_3() {
-//     setup_workflow_env_vars(true);
-//     let _m = setup_mock_server(200);
-
-//     let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
-
-//     {
-//         // Calling update_ready on first run of workflow will return false since we assume workflow
-//         // was just downloaded.
-//         let r = updater
-//             .update_ready_async()
-//             .unwrap_or_else(|e| panic!(e))
-//             .recv()
-//             .unwrap()
-//             .unwrap();
-//         assert_eq!(false, r);
-//     }
-
-//     // Next check will spawn a thread.
-//     {
-//         updater.set_interval(0);
-//         // Introduce a server error
-//         let _m = setup_mock_server(500);
-//         let r = updater.update_ready_async();
-
-//         // Calling and spawning thread should go ok
-//         assert!(r.is_ok());
-
-//         // However the received msg should contain error since spawned thread
-//         // will get a 500 error from server
-//         let msg = r.unwrap().recv().unwrap();
-//         assert!(msg.is_err());
-//         msg.unwrap();
-//     }
-// }
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update")
+    );
+}
 
 pub(super) fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
     // Mimic Alfred's environment variables
@@ -403,4 +293,22 @@ pub(super) fn setup_workflow_env_vars(secure_temp_dir: bool) -> PathBuf {
         StdEnv::set_var("alfred_workflow_version", VERSION_TEST);
     }
     path
+}
+
+fn first_check_after_installing_workflow(async: bool) {
+    // since the first check after workflow installation by user will return no update available,
+    // we need to run it at the beginning of some tests
+    let _m = setup_mock_server(200);
+
+    let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    assert_eq!(VERSION_TEST, format!("{}", updater.current_version()));
+
+    if async {
+        updater.init().expect("couldn't init worker");
+    }
+    // First update_ready is always false.
+    assert_eq!(
+        false,
+        updater.update_ready().expect("couldn't check for update")
+    );
 }

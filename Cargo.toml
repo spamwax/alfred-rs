@@ -37,7 +37,7 @@ tempfile = "^3.0"
 mockito = "0.9"
 
 [features]
-default = []
+default = ["updater"]
 updater = ["chrono", "failure", "reqwest", "semver", "serde", "serde_derive", "time", "url", "url_serde"]
 
 # are we testing on CI?

@@ -307,8 +307,6 @@ where
             let rx = rx_option.as_ref().unwrap();
             let rr = rx.recv();
             if rr.is_ok() {
-                self.set_last_check(Utc::now());
-                self.save()?;
                 let msg = rr.as_ref().unwrap();
                 if msg.is_ok() {
                     let update_info = msg.as_ref().unwrap();
@@ -317,6 +315,8 @@ where
                 } else {
                     return Err(err_msg(format!("{:?}", msg.as_ref().unwrap_err())));
                 }
+                self.set_last_check(Utc::now());
+                self.save()?;
             } else {
                 eprintln!("{:?}", rr);
                 return Err(err_msg(format!("{:?}", rr)));

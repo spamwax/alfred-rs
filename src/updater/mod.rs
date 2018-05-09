@@ -160,6 +160,8 @@ use self::imp::default_interval;
 
 // TODO: Update Releaser trait so we don't need two methods (lastest_version and downloadable_url)
 //     Only one method (latest_release?) should return both version and a download url.
+// TODO: Wrap update_interval & current_version in RefCell so we API doesn't require mut Updater.
+//     We should then add current_version() and current_interval() methods.
 
 /// Struct to check for & download the latest release of workflow from a remote server.
 pub struct Updater<T>
