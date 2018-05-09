@@ -6,7 +6,7 @@
 //! alfred = { version = "4", features = ["updater"] }
 //! ```
 //! Using this module, the workflow author can make Alfred check for latest releases from a remote
-//! server within adjustable intervals ([`update_ready_async()`] or [`update_ready()`])
+//! server within adjustable intervals ([`try_update_ready()`] or [`update_ready()`])
 //! (default is 24 hrs).
 //!
 //! Additionally they can ask Alfred to download the new release to its cache folder for further
@@ -18,7 +18,7 @@
 //! However, it's possible to check with other servers as long as the [`Releaser`] trait is
 //! implemented for the desired remote service.
 //! See [`Updater::new()`] documentation if you are hosting your workflow
-//! on non a `github.com` service.
+//! on a non `github.com` service.
 //!
 //! The `github.com` hosted repository should have release items following `github`'s process.
 //! This can be done by tagging a commit and then manually building a release where you
@@ -33,7 +33,7 @@
 //!
 //! ## Note to workflow authors
 //! - Depending on network quality, checking if an update is available may take a long time.
-//! This module can spawn a worker thread so the check does not block the main flow of your plugin.
+//! This module may spawn a worker thread so that the check does not block the main flow of your plugin.
 //! However given the limitations of Alfred's plugin architecture, the worker thread cannot outlive
 //! your plugin's executable. This means that you either have to wait/block for the worker thread,
 //! or if it is taking longer than a desirable time, you will have to abandon it.
@@ -45,7 +45,7 @@
 //! [`Releaser`]: trait.Releaser.html
 //! [`Updater`]: struct.Updater.html
 //! [`update_ready()`]: struct.Updater.html#method.update_ready
-//! [`update_ready_async()`]: struct.Updater.html#method.update_ready_async
+//! [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
 //! [`download_latest()`]: struct.Updater.html#method.download_latest
 //! [`Updater::gh()`]: struct.Updater.html#method.gh
 //! [`Updater::new()`]: struct.Updater.html#method.new
@@ -57,7 +57,7 @@
 //!
 //! # Example
 //!
-//! Create an updater for a workflow hosted on `github.com/kballard/alfred-rs`.
+//! Create an updater for a workflow hosted on `github.com/spamwax/alfred-pinboard-rs`.
 //! By default, it will check for new releases every 24 hours.
 //! To change the interval, use [`set_interval()`] method.
 //!
@@ -75,7 +75,7 @@
 //! # }
 //! # fn do_some_other_stuff() {}
 //! fn run<'a>() -> Result<Vec<Item<'a>>, Error> {
-//!     let updater = Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
+//!     let updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
 //!
 //!     // If it has been more than UPDATE_INTERVAL since we last checked,
 //!     // the method will spawn a worker thread to check for updates.
@@ -162,7 +162,6 @@ use self::imp::default_interval;
 //     Only one method (latest_release?) should return both version and a download url.
 // TODO: Wrap update_interval & current_version in RefCell so we API doesn't require mut Updater.
 //     We should then add current_version() and current_interval() methods.
-// TODO: Add blocking and non-blocking update_ready_async versions.
 // TODO: Make sure documentation is ok for each method.
 
 /// Struct to check for & download the latest release of workflow from a remote server.
@@ -174,30 +173,36 @@ where
     releaser: RefCell<T>,
 }
 
+// Payload that the worker thread will send back
 type ReleasePayloadResult = Result<Option<UpdateInfo>, Error>;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UpdaterState {
     current_version: Version,
-    // TODO: rename to avail_release
     avail_release: RefCell<Option<UpdateInfo>>,
     last_check: Cell<Option<DateTime<Utc>>>,
-    #[serde(skip)]
-    worker_state: RefCell<Option<MPSCState>>,
+
     #[serde(skip, default = "default_interval")]
     update_interval: i64,
+    #[serde(skip)]
+    worker_state: RefCell<Option<MPSCState>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct UpdateInfo {
+    // Latest version available from github or releaser
     version: Version,
+
+    // Like to use to download the above version
     #[serde(with = "url_serde")]
     downloadable_url: Url,
 }
 
 #[derive(Debug)]
 struct MPSCState {
+    // First successful call on rx.recv() will cache the results into this field
     recvd_payload: RefCell<Option<ReleasePayloadResult>>,
+    // Receiver end of communication channel with worker thread
     rx: RefCell<Option<Receiver<ReleasePayloadResult>>>,
 }
 
@@ -215,21 +220,24 @@ impl Updater<GithubReleaser> {
     /// # env::set_var("alfred_workflow_uid", "abcdef");
     /// # env::set_var("alfred_workflow_data", env::temp_dir());
     /// # env::set_var("alfred_workflow_version", "0.0.0");
-    /// let updater = Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
+    /// let updater = Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
     /// # }
     /// ```
     ///
     /// This only creates an `Updater` without performing any network operations.
-    /// To check availability of a new release use [`update_ready()`] method.
+    /// To check availability of a new release, launch and check for updates by
+    /// using [`init()`] and [`update_ready()`] or [`try_update_ready()`] methods.
     ///
-    /// To download an available release use [`download_latest()`] method.
+    /// To download an available release use [`download_latest()`] method afterwards.
     ///
     /// # Errors
     /// Error will happen during calling this method if:
     /// - `Updater` state cannot be read/written during instantiation, or
     /// - The workflow version cannot be parsed as semantic version compatible identifier.
     ///
+    /// [`init()`]: struct.Updater.html#method.init
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
+    /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     /// [`download_latest()`]: struct.Updater.html#method.download_latest
     pub fn gh<S>(repo_name: S) -> Result<Self, Error>
     where
@@ -290,18 +298,22 @@ where
     /// # }
     /// ```
     ///
-    /// Note that the method only creates an `Updater` without performing any network operations.
+    /// This only creates an `Updater` without performing any network operations.
+    /// To check availability of a new release, launch and check for updates by
+    /// using [`init()`] and [`update_ready()`] or [`try_update_ready()`] methods.
     ///
     /// To check availability of a new release use [`update_ready()`] method.
     ///
-    /// To download an available release use [`download_latest()`] method.
+    /// To download an available release use [`download_latest()`] method afterwards.
     ///
     /// # Errors
     /// Error will happen during calling this method if:
     /// - `Updater` state cannot be read/written during instantiation, or
     /// - The workflow version cannot be parsed as a semantic version compatible identifier.
     ///
+    /// [`init()`]: struct.Updater.html#method.init
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
+    /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     /// [`download_latest()`]: struct.Updater.html#method.download_latest
     /// [`Releaser`]: trait.Releaser.html
     pub fn new<S>(repo_name: S) -> Result<Updater<T>, Error>
@@ -312,94 +324,21 @@ where
         Self::load_or_new(releaser)
     }
 
-    /// Set workflow's version to `version`.
+    /// Initializes `Updater` to fetch latest release information.
     ///
-    /// Content of `version` needs to follow semantic versioning.
-    ///
-    /// This method is provided so workflow authors can set the version from within the Rust code.
-    ///
-    /// For example, by reading cargo or git info during compile time and using this method to
-    /// assign the version to workflow.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # extern crate alfred;
-    /// # extern crate failure;
-    /// # use alfred::Updater;
-    /// # use std::env;
-    /// # use failure::Error;
-    /// # fn ex_set_version() -> Result<(), Error> {
-    /// # env::set_var("alfred_workflow_uid", "abcdef");
-    /// # env::set_var("alfred_workflow_data", env::temp_dir());
-    /// # env::set_var("alfred_workflow_version", "0.0.0");
-    /// let mut updater = Updater::gh("kballard/alfred-rs")?;
-    /// updater.set_version("0.23.3");
-    /// # Ok(())
-    /// # }
-    ///
-    /// # fn main() {
-    /// #     ex_set_version();
-    /// # }
-    /// ```
-    /// An alternative (recommended) way of setting version is through [Alfred's preferences window].
-    ///
-    /// [Alfred's preferences window]: https://www.alfredapp.com/help/workflows/advanced/variables/
-    ///
-    /// # Panics
-    /// The method will panic if the passed value `version` cannot be parsed as a semantic version compatible string.
-    pub fn set_version<S: AsRef<str>>(&mut self, version: S) {
-        self.state.current_version = Version::parse(version.as_ref())
-            .expect("version should follow semantic version rules.");
-        StdEnv::set_var("alfred_workflow_version", version.as_ref());
-    }
-
-    /// Set the interval between checks for a newer release (in seconds)
-    ///
-    /// # Example
-    /// Set interval to be 7 days
-    ///
-    /// ```rust
-    /// # extern crate alfred;
-    /// # use alfred::Updater;
-    /// # use std::env;
-    /// # fn main() {
-    /// # env::set_var("alfred_workflow_uid", "abcdef");
-    /// # env::set_var("alfred_workflow_data", env::temp_dir());
-    /// # env::set_var("alfred_workflow_version", "0.0.0");
-    /// let mut updater =
-    ///     Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
-    /// updater.set_interval(7 * 24 * 60 * 60);
-    /// # }
-    /// ```
-    pub fn set_interval(&mut self, tick: i64) {
-        self.set_update_interval(tick);
-    }
-
-    /// Checks if a new update is available (non-blocking).
-    ///
-    /// This method will fetch the latest release information from repository
-    /// and compare it to the current release of the workflow. The repository should
-    /// tag each release according to semantic version scheme for this to work.
-    ///
-    /// The spawned thread will attempt to make a network call to fetch metadata of releases
+    /// - If it has been more than UPDATE_INTERVAL seconds (see [`set_interval()`]) since last check,
+    /// the method will spawn a worker thread.
+    /// In the background, the spawned thread will attempt to make a network call to fetch metadata of releases
     /// *only if* UPDATE_INTERVAL seconds has passed since the last network call.
     ///
-    /// All calls, which happen before the UPDATE_INTERVAL seconds, will use a local cache
-    /// to report availability of a release.
+    /// - All calls, which happen before the UPDATE_INTERVAL seconds, will initialize the `Updater`
+    /// by using a local cache to report metadata about a release.
     ///
-    /// For `Updater`s talking to `github.com`, this method will only fetch a small metadata information
-    /// to extract the version of the latest release.
+    /// For `Updater`s talking to `github.com`, the worker thread will only fetch a small
+    /// metadata information to extract the version of the latest release.
     ///
-    /// ## Note
-    /// Unlike [`update_ready()`], this method does not block the current thread. In order to use the
-    /// possible result produced by the spawned thread, you need to call either [`recv()`] (blocking) or
-    /// [`try_recv()`] (non-blocking) method of the returned `Receiver` before your application's
-    /// `main()` exits.
-    ///
-    /// Note that the worker thread may not have been done by the time you call [`try_recv()`], which
-    /// results a no-response error and the main thread continuing its normal execution without blocking.
-    ///
+    /// To check on status of worker thread and to get latest release status, use either of
+    /// [`update_ready()`] or [`try_update_ready()`] methods.
     ///
     /// # Example
     ///
@@ -411,29 +350,30 @@ where
     /// # use std::env;
     /// # fn do_some_other_stuff() {}
     /// # fn test_async() -> Result<(), Error> {
-    /// let mut updater = Updater::gh("kballard/alfred-rs")?;
+    /// let updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
     ///
-    /// let rx = updater.update_ready_async().expect("Error in building & spawning worker");
+    /// let rx = updater.init().expect("Error in starting updater.");
     ///
     /// // We'll do some other work that's related to our workflow while waiting
     /// do_some_other_stuff();
     ///
-    /// // We can now check if update is ready using two methods on `rx`:
-    /// // 1- Block and wait until it receives results or errors
-    /// let communication = rx.recv();
+    /// // We can now check if update is ready using two methods:
+    /// // 1- Block and wait until we receives results or errors
+    /// let update_status = updater.update_ready();
     ///
     /// // 2- Or without blocking, check if the worker thread sent the results.
-    /// //    If the worker thread is still busy, the `communication` will be an `Err`
-    /// let communication = rx.try_recv();
+    /// //    If the worker thread is still busy, we'll get an `Err`
+    /// let update_status = updater.try_update_ready();
     ///
-    /// if let Ok(msg) = communication { // Communication with worker thread was successful
-    ///
-    ///     if let Ok(ready) = msg {
-    ///         // No error happened during operation of worker thread and a `msg` containing
-    ///         // the `ready` flag is available.
-    ///         // Use it to see if an update is available or not.
+    /// if let Ok(is_ready) = update_status {
+    ///         // Everything went ok:
+    ///         // No error happened during operation of worker thread
+    ///         // and we received release info
+    ///         if is_ready {
+    ///             // there is an update available.
+    ///         }
     ///     } else {
-    ///         /* worker thread wasn't successful */
+    ///         /* either the worker thread wasn't successful or we couldn't get its results */
     ///     }
     ///
     /// }
@@ -443,12 +383,16 @@ where
     /// # test_async();
     /// # }
     /// ```
-    /// [`Releaser`]: trait.Releaser.html
-    /// [`Receiver`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html
-    /// [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
+    ///
+    /// # Errors
+    /// Followings can cause the method return an error:
+    /// - A worker thread cannot be spawned
+    /// - Alfred environment variable error
+    /// - File IO error
+    ///
+    /// [`set_interval()`]: struct.Updater.html#method.set_interval
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
-    /// [`recv()`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.recv
-    /// [`try_recv()`]: https://doc.rust-lang.org/std/sync/mpsc/struct.Receiver.html#method.try_recv
+    /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     pub fn init(&self) -> Result<(), Error> {
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
@@ -487,20 +431,199 @@ where
         Ok(())
     }
 
+    /// Checks if a new update is available by waiting for the background thread to finish
+    /// fetching release info (blocking).
+    ///
+    /// In practice, this method will block if it has been more than UPDATE_INTERVAL seconds
+    /// since last check. In any other instance the updater will return the update status
+    /// that was cached since last check.
+    ///
+    /// This method will wait for worker thread (spawned by calling [`init()`]) to deliver release
+    /// information from remote server.
+    /// Upon successfull retreival, this method will compare release information to the current
+    /// vertion of the workflow. The remote repository should tag each release according to semantic
+    /// version scheme for this to work.
+    ///
+    /// You should use this method after calling `init()`, preferably after your workflow is done with other tasks
+    /// and now wants to get information about the latest release.
+    ///
+    /// # Note
+    ///
+    /// - Since this method may block the current thread until a response is received from remote server,
+    /// workflow authors should consider scenarios where network connection is poor and the block can
+    /// take a long time (>1 second), and devise their workflow around it. An alternative to
+    /// this method is the non-blocking [`try_update_ready()`].
+    /// - The *very first* call to this method will always return false since it is assumed that
+    /// user has just downloaded and installed the workflow.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # extern crate alfred;
+    /// # extern crate failure;
+    /// use alfred::Updater;
+    ///
+    /// # use failure::Error;
+    /// # use std::io;
+    /// # fn main() {
+    /// let updater =
+    ///     Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
+    /// updater.init().expect("cannot start the worker thread");
+    ///
+    /// // Perform other workflow related tasks...
+    ///
+    /// assert_eq!(true, updater.update_ready().expect("cannot get update information"));
+    ///
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// Error will be returned :
+    /// - If worker thread has been interrupted
+    /// - If [`init()`] method has not been called successfully before this method
+    /// - If worker could not communicate with server
+    /// - If any file error or Alferd environment variable error happens
+    ///
+    /// [`init()`]: struct.Updater.html#method.init
+    /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     pub fn update_ready(&self) -> Result<bool, Error> {
         if self.state.worker_state.borrow().is_none() {
             self.update_ready_sync()
         } else {
-            self.update_ready_async_(false)
+            self.update_ready_async(false)
         }
     }
 
+    /// Try to get release info from background worker and see if a new update is available (non-blocking).
+    ///
+    /// This method will attempt to receive release information from worker thread
+    /// (spawned by calling [`init()`]). Upon successfull retreival, this method will compare
+    /// release information to the current vertion of the workflow.
+    /// The remote repository should tag each release according to semantic version scheme
+    /// for this to work.
+    ///
+    /// If communication with worker thread is not successful or if the worker thread could not
+    /// fetch release information, this method will return an error.
+    ///
+    /// You should use this method after calling `init()`, preferably after your workflow is done with other tasks
+    /// and now wants to get information about the latest release.
+    ///
+    /// # Note
+    ///
+    /// - To wait for the worker thread to deliver its release information you can use the blocking
+    /// [`update_ready()`] method.
+    /// - The *very first* call to this method will always return false since it is assumed that
+    /// user has just downloaded and installed the workflow.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// extern crate alfred;
+    /// # extern crate failure;
+    ///
+    /// use alfred::Updater;
+    ///
+    /// # use failure::Error;
+    /// # use std::io;
+    ///
+    /// # fn do_some_other_stuff() {}
+    ///
+    /// fn main() {
+    /// let updater =
+    ///     Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
+    /// updater.init().expect("cannot start the worker thread");
+    ///
+    /// // Perform other workflow related tasks...
+    /// do_some_other_stuff();
+    ///
+    /// assert_eq!(true, updater.try_update_ready().expect("cannot get update information"));
+    ///
+    /// // Execution of program will immediately follow to here since this method is non-blocking.
+    ///
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// Error will be returned :
+    /// - If worker thread is not ready to send information or it has been interrupted
+    /// - If [`init()`] method has not been called successfully before this method
+    /// - If worker could not communicate with server
+    /// - If any file error or Alferd environment variable error happens
+    ///
+    /// [`init()`]: struct.Updater.html#method.init
+    /// [`update_ready()`]: struct.Updater.html#method.update_ready
     pub fn try_update_ready(&self) -> Result<bool, Error> {
         if self.state.worker_state.borrow().is_none() {
             self.update_ready_sync()
         } else {
-            self.update_ready_async_(true)
+            self.update_ready_async(true)
         }
+    }
+
+    /// Set workflow's version to `version`.
+    ///
+    /// Content of `version` needs to follow semantic versioning.
+    ///
+    /// This method is provided so workflow authors can set the version from within the Rust code.
+    ///
+    /// For example, by reading cargo or git info during compile time and using this method to
+    /// assign the version to workflow.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # extern crate alfred;
+    /// # extern crate failure;
+    /// # use alfred::Updater;
+    /// # use std::env;
+    /// # use failure::Error;
+    /// # fn ex_set_version() -> Result<(), Error> {
+    /// # env::set_var("alfred_workflow_uid", "abcdef");
+    /// # env::set_var("alfred_workflow_data", env::temp_dir());
+    /// # env::set_var("alfred_workflow_version", "0.0.0");
+    /// let mut updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
+    /// updater.set_version("0.23.3");
+    /// # Ok(())
+    /// # }
+    ///
+    /// # fn main() {
+    /// #     ex_set_version();
+    /// # }
+    /// ```
+    /// An alternative (recommended) way of setting version is through [Alfred's preferences window].
+    ///
+    /// [Alfred's preferences window]: https://www.alfredapp.com/help/workflows/advanced/variables/
+    ///
+    /// # Panics
+    /// The method will panic if the passed value `version` cannot be parsed as a semantic version compatible string.
+    pub fn set_version<S: AsRef<str>>(&mut self, version: S) {
+        self.state.current_version = Version::parse(version.as_ref())
+            .expect("version should follow semantic version rules.");
+        StdEnv::set_var("alfred_workflow_version", version.as_ref());
+    }
+
+    /// Set the interval between checks for a newer release (in seconds)
+    ///
+    /// Default value is 86,400 seconds (24 hrs).
+    ///
+    /// # Example
+    /// Set interval to be 7 days
+    ///
+    /// ```rust
+    /// # extern crate alfred;
+    /// # use alfred::Updater;
+    /// # use std::env;
+    /// # fn main() {
+    /// # env::set_var("alfred_workflow_uid", "abcdef");
+    /// # env::set_var("alfred_workflow_data", env::temp_dir());
+    /// # env::set_var("alfred_workflow_version", "0.0.0");
+    /// let mut updater =
+    ///     Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
+    /// updater.set_interval(7 * 24 * 60 * 60);
+    /// # }
+    /// ```
+    pub fn set_interval(&mut self, tick: i64) {
+        self.set_update_interval(tick);
     }
 
     /// Check if it is time to ask remote server for latest updates.
@@ -518,7 +641,7 @@ where
     /// # use alfred::Updater;
     /// # use failure::Error;
     /// # fn run() -> Result<(), Error> {
-    /// let mut updater = Updater::gh("kballard/alfred-rs")?;
+    /// let mut updater = Updater::gh("spamwax/alfred-pinboard-rs")?;
     ///
     /// // Assuming it is has been UPDATE_INTERVAL seconds since last time we ran the
     /// // `update_ready()` and there actually exists a new release:
@@ -577,19 +700,19 @@ where
     ///
     /// # fn main() {
     /// # let updater =
-    /// #    Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
+    /// #    Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
     /// # let cmd_line_download_flag = true;
     /// if cmd_line_download_flag && updater.update_ready().unwrap() {
     ///     match updater.download_latest() {
     ///         Ok(downloaded_fn) => {
-    ///           json::write_items(io::stdout(), &[
-    ///               ItemBuilder::new("New version of workflow is available!")
-    ///                            .subtitle("Click to upgrade!")
-    ///                            .arg(downloaded_fn.to_str().unwrap())
-    ///                            .variable("update_ready", "yes")
-    ///                            .valid(true)
-    ///                            .into_item()
-    ///           ]);
+    ///             json::write_items(io::stdout(), &[
+    ///                 ItemBuilder::new("New version of workflow is available!")
+    ///                              .subtitle("Click to upgrade!")
+    ///                              .arg(downloaded_fn.to_str().unwrap())
+    ///                              .variable("update_ready", "yes")
+    ///                              .valid(true)
+    ///                              .into_item()
+    ///             ]);
     ///         },
     ///         Err(e) => {
     ///             // Show an error message to user or log it.
@@ -609,7 +732,9 @@ where
     ///
     /// # Errors
     /// Downloading latest workflow can fail if network error, file error or Alfred environment variable
-    /// errors happen, or if `Releaser` cannot produce a usable download url.
+    /// errors happen, or if [`Releaser`] cannot produce a usable download url.
+    ///
+    /// [`Releaser`]: trait.Releaser.html
     pub fn download_latest(&self) -> Result<PathBuf, Error> {
         let url = self.releaser.borrow().downloadable_url()?;
         let client = reqwest::Client::new();

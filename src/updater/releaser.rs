@@ -19,8 +19,10 @@ pub const MOCK_RELEASER_REPO_NAME: &str = "MockZnVja29mZg==fd850fc2e63511e79f720
 /// An interface for checking with remote servers to identify the latest release for an
 /// Alfred workflow.
 ///
-/// This trait has been implemented for `GithubReleaser` to check for a newer version of a workflow
+/// This trait has been implemented for [`GithubReleaser`] to check for a newer version of a workflow
 /// that's maintained on `github.com`
+///
+/// [`GithubReleaser`]: struct.GithubReleaser.html
 pub trait Releaser: Clone {
     /// Creates a new `Releaser` instance that is identified as `name`
     fn new<S: Into<String>>(name: S) -> Self;

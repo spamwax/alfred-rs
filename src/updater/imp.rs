@@ -98,7 +98,7 @@ where
 
     pub(super) fn start_releaser_worker(
         &self,
-        tx: mpsc::Sender<Result<Option<UpdateInfo>, Error>>,
+        tx: mpsc::Sender<ReleasePayloadResult>,
         p: PathBuf,
     ) -> Result<(), Error> {
         use std::thread;
@@ -213,7 +213,7 @@ where
     /// # use std::io;
     /// # fn main() {
     /// let updater =
-    ///     Updater::gh("kballard/alfred-rs").expect("cannot initiate Updater");
+    ///     Updater::gh("spamwax/alfred-pinboard-rs").expect("cannot initiate Updater");
     ///
     /// // The very first call to `update_ready()` will return `false`
     /// // since it's assumed that user has just downloaded the workflow.
@@ -295,7 +295,7 @@ where
         }
     }
 
-    pub(super) fn update_ready_async_(&self, try_flag: bool) -> Result<bool, Error> {
+    pub(super) fn update_ready_async(&self, try_flag: bool) -> Result<bool, Error> {
         self.state
             .worker_state
             .borrow()
