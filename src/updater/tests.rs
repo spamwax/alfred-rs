@@ -181,7 +181,6 @@ fn it_get_latest_info_from_releaser() {
 }
 
 #[test]
-// #[cfg(not(feature = "ci"))]
 fn it_does_one_network_call_per_interval() {
     setup_workflow_env_vars(true);
     let _m = setup_mock_server(200);

@@ -209,15 +209,19 @@ where
 {
     /// Create an `Updater` object that will interface with a remote repository for updating operations.
     ///
+    /// `repo_name` is an arbitrary tag/identifier associated with the remote repository.
+    ///
     /// How the `Updater` interacts with the remote server should be implemented using the [`Releaser`]
-    /// trait.
+    /// trait. This crate provides a default implementation for interacting with
+    /// `github.com` repositories, see [`gh()`] and [`GithubReleaser`].
+    ///
+    /// # Example
     ///
     /// ```rust,no_run
     /// # extern crate alfred;
     /// # extern crate semver;
     /// # extern crate failure;
     /// # extern crate url;
-    /// use std::io;
     ///
     /// use url::Url;
     /// use semver::Version;
@@ -229,15 +233,15 @@ where
     /// # fn main() {
     ///
     /// #[derive(Clone)]
-    /// struct RemoteReleaser {/* inner */};
+    /// struct MyPrivateHost {/* inner */};
     ///
     /// // You need to actually implement the trait, following is just a mock.
-    /// impl Releaser for RemoteReleaser {
+    /// impl Releaser for MyPrivateHost {
     ///     type SemVersion = Version;
     ///     type DownloadLink = Url;
     ///
     ///     fn new<S: Into<String>>(project_id: S) -> Self {
-    ///         RemoteReleaser {}
+    ///         MyPrivateHost {}
     ///     }
     ///
     ///     fn fetch_latest_release(&self) -> Result<(Version, Url), Error> {
@@ -247,7 +251,7 @@ where
     ///     }
     /// }
     ///
-    /// let updater: Updater<RemoteReleaser> =
+    /// let updater: Updater<MyPrivateHost> =
     ///     Updater::new("my_hidden_proj").expect("cannot initiate Updater");
     /// # }
     /// ```
@@ -270,6 +274,8 @@ where
     /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     /// [`download_latest()`]: struct.Updater.html#method.download_latest
     /// [`Releaser`]: trait.Releaser.html
+    /// [`GithubReleaser`]: struct.GithubReleaser.html
+    /// [`gh()`]: struct.Updater.html#method.gh
     pub fn new<S>(repo_name: S) -> Result<Updater<T>, Error>
     where
         S: Into<String>,
@@ -280,12 +286,12 @@ where
 
     /// Initializes `Updater` to fetch latest release information.
     ///
-    /// - If it has been more than UPDATE_INTERVAL seconds (see [`set_interval()`]) since last check,
+    /// - If it has been more than [`UPDATE_INTERVAL`] seconds (see [`set_interval()`]) since last check,
     /// the method will spawn a worker thread.
     /// In the background, the spawned thread will attempt to make a network call to fetch metadata of releases
-    /// *only if* UPDATE_INTERVAL seconds has passed since the last network call.
+    /// *only if* `UPDATE_INTERVAL` seconds has passed since the last network call.
     ///
-    /// - All calls, which happen before the UPDATE_INTERVAL seconds, will initialize the `Updater`
+    /// - All calls, which happen before the `UPDATE_INTERVAL` seconds, will initialize the `Updater`
     /// by using a local cache to report metadata about a release.
     ///
     /// For `Updater`s talking to `github.com`, the worker thread will only fetch a small
@@ -345,6 +351,7 @@ where
     /// [`set_interval()`]: struct.Updater.html#method.set_interval
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
     /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
+    /// [`UPDATE_INTERVAL`]: constant.UPDATE_INTERVAL.html
     pub fn init(&self) -> Result<(), Error> {
         use self::imp::LATEST_UPDATE_INFO_CACHE_FN_ASYNC;
         use std::sync::mpsc;
@@ -383,7 +390,7 @@ where
     /// Checks if a new update is available by waiting for the background thread to finish
     /// fetching release info (blocking).
     ///
-    /// In practice, this method will block if it has been more than UPDATE_INTERVAL seconds
+    /// In practice, this method will block if it has been more than [`UPDATE_INTERVAL`] seconds
     /// since last check. In any other instance the updater will return the update status
     /// that was cached since last check.
     ///
@@ -435,6 +442,7 @@ where
     ///
     /// [`init()`]: struct.Updater.html#method.init
     /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
+    /// [`UPDATE_INTERVAL`]: constant.UPDATE_INTERVAL.html
     pub fn update_ready(&self) -> Result<bool, Error> {
         if self.state.borrow_worker().is_none() {
             self.update_ready_sync()
@@ -555,7 +563,7 @@ where
 
     /// Set the interval between checks for a newer release (in seconds)
     ///
-    /// Default value is 86,400 seconds (24 hrs).
+    /// [Default value][`UPDATE_INTERVAL`] is 86,400 seconds (24 hrs).
     ///
     /// # Example
     /// Set interval to be 7 days
@@ -573,13 +581,14 @@ where
     /// updater.set_interval(7 * 24 * 60 * 60);
     /// # }
     /// ```
+    /// [`UPDATE_INTERVAL`]: constant.UPDATE_INTERVAL.html
     pub fn set_interval(&mut self, tick: i64) {
         self.set_update_interval(tick);
     }
 
     /// Check if it is time to ask remote server for latest updates.
     ///
-    /// It returns `true` if it has been more than UPDATE_INTERVAL seconds since we last
+    /// It returns `true` if it has been more than [`UPDATE_INTERVAL`] seconds since we last
     /// checked with server (i.e. ran [`update_ready()`]), otherwise returns false.
     ///
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
@@ -604,6 +613,7 @@ where
     /// # }
     /// ```
     ///
+    /// [`UPDATE_INTERVAL`]: constant.UPDATE_INTERVAL.html
     pub fn due_to_check(&self) -> bool {
         self.last_check().map_or(true, |dt| {
             Utc::now().signed_duration_since(dt) > Duration::seconds(self.update_interval())

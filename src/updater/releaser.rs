@@ -43,11 +43,13 @@ pub trait Releaser: Clone {
     /// Implementors are strongly encouraged to get the meta-data about the latest release without
     /// performing a full download of the workflow.
     ///
+    /// # Errors
     /// Method returns `Err(Error)` on file or network error.
     fn fetch_latest_release(&self) -> Result<(Self::SemVersion, Self::DownloadLink), Error>;
 
     /// Returns the latest release information that is available from server.
     ///
+    /// # Errors
     /// Method returns `Err(Error)` on file or network error.
     fn latest_release(&self) -> Result<(Version, Url), Error> {
         let (v, url) = self.fetch_latest_release()?;
