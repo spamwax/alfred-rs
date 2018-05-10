@@ -5,6 +5,7 @@ use mockito;
 use reqwest;
 use semver::Version;
 use serde_json;
+use std::cell::RefCell;
 use url::Url;
 
 #[cfg(not(test))]
@@ -24,7 +25,10 @@ pub const MOCK_RELEASER_REPO_NAME: &str = "MockZnVja29mZg==fd850fc2e63511e79f720
 ///
 /// [`GithubReleaser`]: struct.GithubReleaser.html
 pub trait Releaser: Clone {
-    /// Creates a new `Releaser` instance that is identified as `name`
+    type SemVersion: Into<Version>;
+    type DownloadLink: Into<Url>;
+
+    /// Creates a new `Releser` instance that is identified as `name`
     fn new<S: Into<String>>(name: S) -> Self;
 
     /// Returns an `Ok(url)` that can be used to directly download the `.alfredworkflow`
@@ -38,7 +42,9 @@ pub trait Releaser: Clone {
     /// performing a full download of the workflow.
     ///
     /// Method returns `Err(Error)` on file or network error.
-    fn latest_version(&mut self) -> Result<Version, Error>;
+    fn latest_version(&self) -> Result<Version, Error>;
+
+    fn latest_release(&self) -> Result<(Self::SemVersion, Self::DownloadLink), Error>;
 }
 
 /// Struct to handle checking and finding release files from `github.com`
@@ -49,7 +55,7 @@ pub trait Releaser: Clone {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GithubReleaser {
     repo: String,
-    latest_release: Option<ReleaseItem>,
+    latest_release: RefCell<Option<ReleaseItem>>,
 }
 
 // Struct to store information about a single release point.
@@ -72,7 +78,7 @@ struct ReleaseAsset {
 }
 
 impl GithubReleaser {
-    fn latest_release_data(&mut self) -> Result<(), Error> {
+    fn latest_release_data(&self) -> Result<(), Error> {
         let client = reqwest::Client::new();
 
         #[cfg(test)]
@@ -94,17 +100,20 @@ impl GithubReleaser {
                 if latest.tag_name.starts_with('v') {
                     latest.tag_name.remove(0);
                 }
-                self.latest_release = Some(latest);
+                *self.latest_release.borrow_mut() = Some(latest);
                 Ok(())
             })
     }
 }
 
 impl Releaser for GithubReleaser {
+    type SemVersion = Version;
+    type DownloadLink = Url;
+
     fn new<S: Into<String>>(repo_name: S) -> GithubReleaser {
         GithubReleaser {
             repo: repo_name.into(),
-            latest_release: None,
+            latest_release: RefCell::new(None),
         }
     }
 
@@ -112,9 +121,15 @@ impl Releaser for GithubReleaser {
     // over `alfredworkflow`
     fn downloadable_url(&self) -> Result<Url, Error> {
         self.latest_release
+            .borrow()
             .as_ref()
-            .map(|r| {
-                r.assets
+            .ok_or_else(|| {
+                err_msg(
+                "no release item available, did you first get version by calling latest_version?",
+            )
+            })
+            .and_then(|r| {
+                let urls = r.assets
                     .iter()
                     .filter(|asset| {
                         asset.state == "uploaded"
@@ -122,35 +137,40 @@ impl Releaser for GithubReleaser {
                                 || asset.browser_download_url.ends_with("alfred3workflow"))
                     })
                     .map(|asset| &asset.browser_download_url)
-                    .collect::<Vec<&String>>()
-            })
-            .ok_or_else(|| {
-                err_msg(
-                "no release item available, did you first get version by calling latest_version?",
-            )
-            })
-            .and_then(|urls| match urls.len() {
-                0 => Err(err_msg("no usable download url")),
-                1 => Ok(Url::parse(urls[0])?),
-                _ => {
-                    let url = urls.iter().find(|item| item.ends_with("alfred3workflow"));
-                    let u = url.unwrap_or(&urls[0]);
-                    Ok(Url::parse(u)?)
+                    .collect::<Vec<&String>>();
+                match urls.len() {
+                    0 => Err(err_msg("no usable download url")),
+                    1 => Ok(Url::parse(urls[0])?),
+                    _ => {
+                        let url = urls.iter().find(|item| item.ends_with("alfred3workflow"));
+                        let u = url.unwrap_or(&urls[0]);
+                        Ok(Url::parse(u)?)
+                    }
                 }
             })
     }
 
-    fn latest_version(&mut self) -> Result<Version, Error> {
-        if self.latest_release.is_none() {
+    fn latest_version(&self) -> Result<Version, Error> {
+        if self.latest_release.borrow().is_none() {
             self.latest_release_data()?;
         }
 
         let latest_version = self.latest_release
+            .borrow()
             .as_ref()
             .map(|r| Version::parse(&r.tag_name).ok())
             .ok_or_else(|| err_msg("Couldn't parse fetched version."))?
             .unwrap();
         Ok(latest_version)
+    }
+
+    fn latest_release(&self) -> Result<(Version, Url), Error> {
+        if self.latest_release.borrow().is_none() {
+            self.latest_release_data()?;
+        }
+        let version = self.latest_version()?;
+        let link = self.downloadable_url()?;
+        Ok((version, link))
     }
 }
 
