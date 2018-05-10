@@ -225,6 +225,45 @@ fn it_tests_download() {
 }
 
 #[test]
+#[should_panic(expected = "no release info")]
+fn it_doesnt_download_without_release_info() {
+    setup_workflow_env_vars(true);
+    let _m = setup_mock_server(200);
+    first_check_after_installing_workflow(true);
+
+    let updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    updater.init().expect("couldn't init worker");
+
+    assert!(updater.download_latest().is_err());
+
+    // Since check time is due yet, following will just read cache without
+    // getting any release info, hence the last line should panic
+    assert_eq!(
+        false,
+        updater.update_ready().expect("couldn't check for update")
+    );
+    updater.download_latest().unwrap();
+}
+
+#[test]
+fn it_downloads_after_getting_release_info() {
+    setup_workflow_env_vars(true);
+    let _m = setup_mock_server(200);
+    first_check_after_installing_workflow(true);
+
+    let mut updater = Updater::gh(MOCK_RELEASER_REPO_NAME).expect("cannot build Updater");
+    updater.set_interval(0);
+    updater.init().expect("couldn't init worker");
+    assert!(updater.download_latest().is_err());
+
+    assert_eq!(
+        true,
+        updater.update_ready().expect("couldn't check for update")
+    );
+    assert!(updater.download_latest().is_ok());
+}
+
+#[test]
 fn it_tests_async_updates_1() {
     //
     setup_workflow_env_vars(true);

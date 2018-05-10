@@ -27,12 +27,19 @@ impl UpdaterState {
         self.current_version = v;
     }
 
-    pub(super) fn borrow<'a>(&'a self) -> Ref<'a, Option<MPSCState>> {
+    pub(super) fn borrow_worker<'a>(&'a self) -> Ref<'a, Option<MPSCState>> {
         self.worker_state.borrow()
     }
 
-    pub(super) fn borrow_mut<'a>(&'a self) -> RefMut<'a, Option<MPSCState>> {
+    pub(super) fn borrow_worker_mut<'a>(&'a self) -> RefMut<'a, Option<MPSCState>> {
         self.worker_state.borrow_mut()
+    }
+
+    pub(super) fn download_url(&self) -> Option<Url> {
+        self.avail_release
+            .borrow()
+            .as_ref()
+            .map(|info| info.downloadable_url.clone())
     }
 }
 

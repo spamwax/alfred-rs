@@ -84,7 +84,9 @@
 //!     let mut items: Vec<Item> = produce_items_for_user_to_see();
 //!
 //!     // We can now check if update is ready using two methods:
-//!     // 1- Block and wait until we receives results from worker thread
+//!     // 1- Block and wait until we receive results from worker thread
+//!     //    It's a good practice to only wait for worker for a limited time so
+//!     //    our workflow doesn't become unresponsive (not shown here)
 //!     let update_status = updater.update_ready();
 //!
 //!     // 2- Or without blocking, check if the worker thread sent the results.
@@ -310,7 +312,7 @@ where
     /// do_some_other_stuff();
     ///
     /// // We can now check if update is ready using two methods:
-    /// // 1- Block and wait until we receives results or errors
+    /// // 1- Block and wait until we receive results or errors
     /// let update_status = updater.update_ready();
     ///
     /// // 2- Or without blocking, check if the worker thread sent the results.
@@ -374,7 +376,7 @@ where
                 .or(Ok(None));
             tx.send(status).unwrap();
         }
-        *self.state.borrow_mut() = Some(imp::MPSCState::new(rx));
+        *self.state.borrow_worker_mut() = Some(imp::MPSCState::new(rx));
         Ok(())
     }
 
@@ -434,7 +436,7 @@ where
     /// [`init()`]: struct.Updater.html#method.init
     /// [`try_update_ready()`]: struct.Updater.html#method.try_update_ready
     pub fn update_ready(&self) -> Result<bool, Error> {
-        if self.state.borrow().is_none() {
+        if self.state.borrow_worker().is_none() {
             self.update_ready_sync()
         } else {
             self.update_ready_async(false)
@@ -500,7 +502,7 @@ where
     /// [`init()`]: struct.Updater.html#method.init
     /// [`update_ready()`]: struct.Updater.html#method.update_ready
     pub fn try_update_ready(&self) -> Result<bool, Error> {
-        if self.state.borrow().is_none() {
+        if self.state.borrow_worker().is_none() {
             self.update_ready_sync()
         } else {
             self.update_ready_async(true)
@@ -685,7 +687,10 @@ where
     ///
     /// [`Releaser`]: trait.Releaser.html
     pub fn download_latest(&self) -> Result<PathBuf, Error> {
-        let url = self.releaser.borrow().downloadable_url()?;
+        // let url = self.releaser.borrow().downloadable_url()?;
+        let url = self.state
+            .download_url()
+            .ok_or(err_msg("no release info avail yet"))?;
         let client = reqwest::Client::new();
 
         client
