@@ -212,42 +212,42 @@ where
     /// How the `Updater` interacts with the remote server should be implemented using the [`Releaser`]
     /// trait.
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// # extern crate alfred;
     /// # extern crate semver;
     /// # extern crate failure;
     /// # extern crate url;
     /// use std::io;
     ///
+    /// use url::Url;
     /// use semver::Version;
+    ///
     /// use alfred::Updater;
     /// use alfred::updater::Releaser;
     /// # use std::env;
     /// # use failure::Error;
-    /// # use url::Url;
     /// # fn main() {
-    /// # env::set_var("alfred_workflow_uid", "abcdef");
-    /// # env::set_var("alfred_workflow_data", env::temp_dir());
-    /// # env::set_var("alfred_workflow_version", "0.0.0");
-    /// # env::set_var("alfred_workflow_name", "NameName");
     ///
     /// #[derive(Clone)]
-    /// struct RemoteCIReleaser {/* inner */};
+    /// struct RemoteReleaser {/* inner */};
     ///
     /// // You need to actually implement the trait, following is just a mock.
-    /// impl Releaser for RemoteCIReleaser {
+    /// impl Releaser for RemoteReleaser {
+    ///     type SemVersion = Version;
+    ///     type DownloadLink = Url;
+    ///
     ///     fn new<S: Into<String>>(project_id: S) -> Self {
-    ///         RemoteCIReleaser {}
+    ///         RemoteReleaser {}
     ///     }
-    ///     fn downloadable_url(&self) -> Result<Url, Error> {
-    ///         Ok(Url::parse("https://ci.remote.cc")?)
-    ///     }
-    ///     fn latest_version(&mut self) -> Result<Version, Error> {
-    ///         Ok(Version::from((1, 0, 12)))
+    ///
+    ///     fn fetch_latest_release(&self) -> Result<(Version, Url), Error> {
+    ///         let version = Version::from((1, 0, 12));
+    ///         let url = Url::parse("https://ci.remote.cc/release/latest")?;
+    ///         Ok((version, url))
     ///     }
     /// }
     ///
-    /// let updater: Updater<RemoteCIReleaser> =
+    /// let updater: Updater<RemoteReleaser> =
     ///     Updater::new("my_hidden_proj").expect("cannot initiate Updater");
     /// # }
     /// ```
