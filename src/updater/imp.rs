@@ -171,13 +171,12 @@ where
     ) -> Result<(), Error> {
         use std::thread;
 
-        let mut releaser = (*self.releaser.borrow()).clone();
+        let releaser = (*self.releaser.borrow()).clone();
 
         thread::Builder::new().spawn(move || {
-            let mut talk_to_mother = || -> Result<(), Error> {
-                let v = releaser.latest_version()?;
+            let talk_to_mother = || -> Result<(), Error> {
+                let (v, url) = releaser.latest_release()?;
                 let payload = {
-                    let url = releaser.downloadable_url()?;
                     let info = UpdateInfo {
                         version: v,
                         downloadable_url: url,
@@ -317,13 +316,10 @@ where
         // make a network call to see if a newer version is avail.
         // save the result of call to cache file.
         let ask_releaser_for_update = || -> Result<bool, Error> {
-            let (update_avail, v) = self.releaser
-                .borrow_mut()
-                .latest_version()
-                .map(|v| (*self.current_version() < v, v))?;
+            let (v, url) = self.releaser.borrow().latest_release()?;
+            let update_avail = self.current_version() < &v;
 
             let payload = {
-                let url = self.releaser.borrow().downloadable_url()?;
                 let info = UpdateInfo {
                     version: v,
                     downloadable_url: url,

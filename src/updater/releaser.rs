@@ -25,26 +25,34 @@ pub const MOCK_RELEASER_REPO_NAME: &str = "MockZnVja29mZg==fd850fc2e63511e79f720
 ///
 /// [`GithubReleaser`]: struct.GithubReleaser.html
 pub trait Releaser: Clone {
+    /// Typte that represents semantic compatible identifier of a release.
     type SemVersion: Into<Version>;
+
+    /// Type that represents a url to the latest release resource.
     type DownloadLink: Into<Url>;
 
     /// Creates a new `Releser` instance that is identified as `name`
     fn new<S: Into<String>>(name: S) -> Self;
 
-    /// Returns an `Ok(url)` that can be used to directly download the `.alfredworkflow`
+    /// Performs necessary communications to obtain release info in form of
+    /// `SemVersion` and `DownloadLink` types.
     ///
-    /// Method returns `Err(Error)` on file or network error.
-    fn downloadable_url(&self) -> Result<Url, Error>;
-
-    /// Returns the latest release's version that is available for download from server
+    /// Returned tuple consists of semantic version compatible identifier of the release and
+    /// a download link/url that can be used to fetch the release.
     ///
     /// Implementors are strongly encouraged to get the meta-data about the latest release without
     /// performing a full download of the workflow.
     ///
     /// Method returns `Err(Error)` on file or network error.
-    fn latest_version(&self) -> Result<Version, Error>;
+    fn fetch_latest_release(&self) -> Result<(Self::SemVersion, Self::DownloadLink), Error>;
 
-    fn latest_release(&self) -> Result<(Self::SemVersion, Self::DownloadLink), Error>;
+    /// Returns the latest release information that is available from server.
+    ///
+    /// Method returns `Err(Error)` on file or network error.
+    fn latest_release(&self) -> Result<(Version, Url), Error> {
+        let (v, url) = self.fetch_latest_release()?;
+        Ok((v.into(), url.into()))
+    }
 }
 
 /// Struct to handle checking and finding release files from `github.com`
@@ -104,18 +112,6 @@ impl GithubReleaser {
                 Ok(())
             })
     }
-}
-
-impl Releaser for GithubReleaser {
-    type SemVersion = Version;
-    type DownloadLink = Url;
-
-    fn new<S: Into<String>>(repo_name: S) -> GithubReleaser {
-        GithubReleaser {
-            repo: repo_name.into(),
-            latest_release: RefCell::new(None),
-        }
-    }
 
     // This implementation of Releaser will favor urls that end with `alfred3workflow`
     // over `alfredworkflow`
@@ -163,8 +159,20 @@ impl Releaser for GithubReleaser {
             .unwrap();
         Ok(latest_version)
     }
+}
 
-    fn latest_release(&self) -> Result<(Version, Url), Error> {
+impl Releaser for GithubReleaser {
+    type SemVersion = Version;
+    type DownloadLink = Url;
+
+    fn new<S: Into<String>>(repo_name: S) -> GithubReleaser {
+        GithubReleaser {
+            repo: repo_name.into(),
+            latest_release: RefCell::new(None),
+        }
+    }
+
+    fn fetch_latest_release(&self) -> Result<(Version, Url), Error> {
         if self.latest_release.borrow().is_none() {
             self.latest_release_data()?;
         }
@@ -182,7 +190,7 @@ pub mod tests {
     #[test]
     fn it_tests_releaser() {
         let _m = setup_mock_server(200);
-        let mut releaser = GithubReleaser::new(MOCK_RELEASER_REPO_NAME);
+        let releaser = GithubReleaser::new(MOCK_RELEASER_REPO_NAME);
 
         // Calling downloadable_url before checking for latest_version will return error
         assert!(releaser.downloadable_url().is_err());
